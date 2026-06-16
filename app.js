@@ -92,27 +92,45 @@ function ago(d) {
   return Math.round(s / 86400) + "d";
 }
 function nmeOf(addr) { if (!addr) return ""; const m = addr.match(/"?([^"<]+)"?\s*</); let n = m ? m[1].trim() : addr.split("@")[0]; return n.replace(/^["']|["']$/g, ""); }
+let DRAFTS = {}; // threadId -> prepared draft info
+async function loadDrafts() {
+  try {
+    const d = await api("/api/drafts").then((r) => r.json());
+    DRAFTS = {};
+    (d.items || []).forEach((it) => { if (it && it.threadId) DRAFTS[it.threadId] = it; });
+  } catch (e) { /* leave DRAFTS as-is */ }
+}
 async function loadMail() {
   const el = $("#mail");
   try {
+    await loadDrafts();
     const d = await api("/api/gmail").then((r) => r.json());
     const items = d.messages || [];
-    let unread = 0;
+    let unread = 0, dcount = 0;
     el.innerHTML = items.map((m) => {
       const labels = m.labelIds || [];
       const isUnread = labels.includes("UNREAD"); if (isUnread) unread++;
       const isImp = labels.includes("IMPORTANT");
       const snip = (m.snippet || "").replace(/[͏​‌‍­‎﻿\s]+/g, " ").trim();
+      const draft = m.threadId && DRAFTS[m.threadId];
+      let badge = "";
+      if (draft) { dcount++; const url = "https://mail.google.com/mail/u/0/#all/" + encodeURIComponent(m.threadId); badge = '<a class="draftbadge" href="' + url + '" target="_blank" rel="noopener" title="Reply draft ready in your Gmail — click to review">✎ draft ready</a>'; }
       return '<div class="ml"><span class="dot ' + (isUnread ? "unread" : "") + '"></span>' +
         '<div style="flex:1;min-width:0"><div class="from">' + (isImp ? '<span class="imp">&#9733; </span>' : "") + esc(nmeOf(m.sender)) +
         '</div><div class="subj">' + esc(m.subject) + '</div><div class="snip">' + esc(snip.slice(0, 90)) +
-        '</div></div><div class="when">' + (m.date ? ago(m.date) : "") + "</div></div>";
+        '</div>' + badge + '</div><div class="when">' + (m.date ? ago(m.date) : "") + "</div></div>";
     }).join("") || '<div class="empty">Inbox zero.</div>';
-    $("#mail-status").textContent = unread + " unread";
+    $("#mail-status").textContent = unread + " unread" + (dcount ? " · " + dcount + " draft" + (dcount > 1 ? "s" : "") : "");
   } catch (err) { el.innerHTML = '<div class="err">Mail unavailable.</div>'; }
 }
 
-async function loadResearch(){const el=$("#research");if(!el)return;try{const d=await api("/api/research").then(r=>r.json());const secs=(d&&d.sections)||[];if(!secs.length){el.className="";el.innerHTML='<div class="empty">No briefing yet \u2014 it updates each morning.</div>';$("#research-status").textContent="";return;}$("#research-status").textContent=d.updated?("updated "+new Date(d.updated).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})):"";el.className="rcols";el.innerHTML=secs.map(s=>'<div class="rsec"><div class="rtitle">'+esc(s.title)+'</div><ul class="rlist">'+((s.items)||[]).map(it=>"<li>"+esc(it)+"</li>").join("")+'</ul></div>').join("");}catch(e){el.innerHTML='<div class="err">Briefing unavailable.</div>';}}
+function briefItem(it){
+  var t=(it&&typeof it==="object")?(it.t||it.text||""):it;
+  var u=(it&&typeof it==="object")?(it.u||it.url||""):"";
+  if(u){return '<li><a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(t)+'<span class="ext">\u2197</span></a></li>';}
+  return "<li>"+esc(t)+"</li>";
+}
+async function loadResearch(){const el=$("#research");if(!el)return;try{const d=await api("/api/research").then(r=>r.json());const secs=(d&&d.sections)||[];if(!secs.length){el.className="";el.innerHTML='<div class="empty">No briefing yet \u2014 it updates each morning.</div>';$("#research-status").textContent="";return;}$("#research-status").textContent=d.updated?("updated "+new Date(d.updated).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})):"";el.className="rcols";el.innerHTML=secs.map(s=>'<div class="rsec"><div class="rtitle">'+esc(s.title)+'</div><ul class="rlist">'+((s.items)||[]).map(briefItem).join("")+'</ul></div>').join("");}catch(e){el.innerHTML='<div class="err">Briefing unavailable.</div>';}}
 /* ---------- shared list store (KV + localStorage cache) ---------- */
 function lget(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
 function lset(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
@@ -133,22 +151,38 @@ function fmtRem(iso) {
   const t = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   return { lbl: same ? "Today " + t : d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " + t, past: d < now };
 }
+let SHOW_ARCHIVED = false;
+const STATUSES = ["active", "waiting", "hold"];
+function statusChip(s) {
+  s = STATUSES.indexOf(s) >= 0 ? s : "active";
+  const cls = { active: "st-active", waiting: "st-waiting", hold: "st-hold" }[s];
+  return '<span class="tstatus ' + cls + '" data-act="status" title="Click to change status">' + s + "</span>";
+}
 function renderTodos() {
   const el = $("#todos");
-  $("#todo-count").textContent = TODOS.filter((t) => !t.done).length + " open";
-  if (!TODOS.length) { el.innerHTML = '<div class="empty">No tasks yet. Add one above.</div>'; return; }
-  TODOS.sort((a, b) => (a.done - b.done) || ((a.when || "9") > (b.when || "9") ? 1 : -1));
-  el.innerHTML = TODOS.map((t) => {
+  const openCount = TODOS.filter((t) => !t.archived && !t.done).length;
+  const archCount = TODOS.filter((t) => t.archived).length;
+  $("#todo-count").textContent = openCount + " open";
+  const toggle = $("#arch-toggle");
+  if (toggle) toggle.textContent = SHOW_ARCHIVED ? "← back to active" : (archCount ? "View archived (" + archCount + ")" : "");
+  const visible = TODOS.filter((t) => (SHOW_ARCHIVED ? t.archived : !t.archived));
+  if (!visible.length) { el.innerHTML = '<div class="empty">' + (SHOW_ARCHIVED ? "No archived tasks." : "No tasks yet. Add one above.") + "</div>"; return; }
+  visible.sort((a, b) => (a.done - b.done) || (STATUSES.indexOf(a.status || "active") - STATUSES.indexOf(b.status || "active")) || ((a.when || "9") > (b.when || "9") ? 1 : -1));
+  el.innerHTML = visible.map((t) => {
     let rem = "";
     if (t.when) { const r = fmtRem(t.when); rem = '<div class="rem ' + (r.past && !t.done ? "past" : "") + '">&#9200; ' + esc(r.lbl) + "</div>"; }
-    return '<div class="todo ' + (t.done ? "done" : "") + '" data-id="' + t.id + '"><input type="checkbox" ' +
-      (t.done ? "checked" : "") + ' data-act="chk"><div class="tx"><div class="tt">' + esc(t.text) + "</div>" + rem +
-      '</div><button class="del" data-act="del" title="Delete">&times;</button></div>';
+    const chip = t.archived ? "" : statusChip(t.status);
+    const archBtn = t.archived
+      ? '<button class="arch" data-act="unarch" title="Restore to active">&#8617;</button>'
+      : '<button class="arch" data-act="arch" title="Archive">&#128229;</button>';
+    return '<div class="todo ' + (t.done ? "done " : "") + (t.archived ? "archived" : "") + '" data-id="' + t.id + '"><input type="checkbox" ' +
+      (t.done ? "checked" : "") + ' data-act="chk"><div class="tx"><div class="tt">' + chip + esc(t.text) + "</div>" + rem +
+      "</div>" + archBtn + '<button class="del" data-act="del" title="Delete">&times;</button></div>';
   }).join("");
 }
 function addTodo() {
   const tx = $("#t-text").value.trim(); if (!tx) return;
-  TODOS.push({ id: Date.now() + "" + Math.floor(Math.random() * 99), text: tx, when: $("#t-when").value || null, done: false, notified: false });
+  TODOS.push({ id: Date.now() + "" + Math.floor(Math.random() * 99), text: tx, when: $("#t-when").value || null, status: "active", done: false, archived: false, notified: false });
   $("#t-text").value = ""; $("#t-when").value = ""; persistTodos(); renderTodos();
 }
 
@@ -208,10 +242,17 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#todos").addEventListener("click", (e) => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     const id = b.closest(".todo").dataset.id;
-    if (b.dataset.act === "del") TODOS = TODOS.filter((t) => t.id !== id);
-    else if (b.dataset.act === "chk") { const t = TODOS.find((x) => x.id === id); if (t) t.done = !t.done; }
+    const t = TODOS.find((x) => x.id === id);
+    const act = b.dataset.act;
+    if (act === "del") TODOS = TODOS.filter((x) => x.id !== id);
+    else if (act === "chk") { if (t) t.done = !t.done; }
+    else if (act === "status") { if (t) { const i = STATUSES.indexOf(t.status || "active"); t.status = STATUSES[(i + 1) % STATUSES.length]; } }
+    else if (act === "arch") { if (t) { t.archived = true; } }
+    else if (act === "unarch") { if (t) { t.archived = false; } }
     persistTodos(); renderTodos();
   });
+  const archToggle = $("#arch-toggle");
+  if (archToggle) archToggle.addEventListener("click", (e) => { e.preventDefault(); SHOW_ARCHIVED = !SHOW_ARCHIVED; renderTodos(); });
   $("#p-add").onclick = () => {
     const nm = $("#p-name").value.trim(); if (!nm) return;
     PROJS.push({ id: "p" + Date.now(), name: nm, pct: 0 }); $("#p-name").value = ""; persistProjs(); renderProjs();

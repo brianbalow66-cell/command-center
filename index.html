@@ -43,7 +43,7 @@
     <div id="research"><div class="loading">Loading briefing&hellip;</div></div>
   </section>
 
-  <div class="grid4">
+  <div class="grid3">
     <section class="card">
       <h2>Upcoming &middot; Next <span id="cal-days">14</span> Days <span class="badge" id="cal-status"></span></h2>
       <div class="scroll" id="cal"><div class="loading">Loading calendar&hellip;</div></div>
@@ -60,20 +60,21 @@
         <button class="btn" id="t-add">Add</button>
       </div>
       <div class="scroll" id="todos"></div>
-      <div class="notice" id="notif-note"></div>
-    </section>
-    <section class="card">
-      <h2>Projects <span class="badge" id="proj-avg"></span></h2>
-      <div class="addrow">
-        <input type="text" id="p-name" placeholder="New project&hellip;" maxlength="60">
-        <button class="btn ghost" id="p-add">Add</button>
-      </div>
-      <div class="proj-wrap">
-        <div class="proj-list"><div id="projs"></div></div>
-        <div class="proj-chart"><canvas id="pchart" height="78"></canvas></div>
-      </div>
+      <div class="todofoot"><a href="#" id="arch-toggle" class="archlink"></a><span class="notice" id="notif-note"></span></div>
     </section>
   </div>
+
+  <section class="card band-projects">
+    <h2>Projects <span class="badge" id="proj-avg"></span></h2>
+    <div class="addrow">
+      <input type="text" id="p-name" placeholder="New project&hellip;" maxlength="60">
+      <button class="btn ghost" id="p-add">Add</button>
+    </div>
+    <div class="proj-wrap">
+      <div class="proj-list"><div id="projs"></div></div>
+      <div class="proj-chart"><canvas id="pchart" height="78"></canvas></div>
+    </div>
+  </section>
 </div>
 
 <script src="/app.js"></script>
