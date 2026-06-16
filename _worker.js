@@ -17,9 +17,9 @@ async function authLogout(req,env){const s=await getSession(req,env);if(s)await 
 async function getConfig(env){try{const raw=await env.KV.get("config:dashboard");return raw?JSON.parse(raw):{};}catch(e){return {};}}
 async function apiCalendar(env,token){const cfg=await getConfig(env);const now=new Date(),end=new Date(Date.now()+(cfg.calDays||14)*864e5);const u=new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");u.searchParams.set("timeMin",now.toISOString());u.searchParams.set("timeMax",end.toISOString());u.searchParams.set("singleEvents","true");u.searchParams.set("orderBy","startTime");u.searchParams.set("maxResults","25");const d=await gfetch(u.toString(),token).then(r=>r.json());return json({events:(d.items||[]).map(e=>({summary:e.summary||"(no title)",location:e.location||"",eventType:e.eventType||"default",start:e.start||{},end:e.end||{},status:e.status}))});}
 async function apiGmail(env,token){const list=await gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in%3Ainbox&maxResults=12",token).then(r=>r.json());const ids=(list.messages||[]).map(m=>m.id);const msgs=await Promise.all(ids.map(id=>gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/"+id+"?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date",token).then(r=>r.json())));return json({messages:msgs.map(m=>{const hs=((m.payload&&m.payload.headers)||[]).reduce((a,h)=>{a[h.name.toLowerCase()]=h.value;return a;},{});return {sender:hs.from||"",subject:hs.subject||"(no subject)",date:hs.date?new Date(hs.date).toISOString():null,snippet:m.snippet||"",labelIds:m.labelIds||[],threadId:m.threadId||""};})});}
-async function apiMarkets(env){
+async function apiMarkets(env,force){
   const CACHE="markets:cache";
-  try{const c=await env.KV.get(CACHE);if(c){const o=JSON.parse(c);if(Date.now()-o.t<55*60*1000)return json({markets:o.markets,asOf:o.t,cached:true});}}catch(e){}
+  if(!force){try{const c=await env.KV.get(CACHE);if(c){const o=JSON.parse(c);if(Date.now()-o.t<55*60*1000)return json({markets:o.markets,asOf:o.t,cached:true});}}catch(e){}}
   // [yahooSymbol, displayName, stooqSymbol]
   const SYMS=[["^GSPC","S&P 500","^spx"],["^DJI","Dow Jones","^dji"],["^IXIC","Nasdaq","^ndq"],["^TNX","10Y Treasury","10usy.b"],["^VIX","VIX","^vix"],["CL=F","Crude Oil","cl.f"],["GC=F","Gold","xauusd"],["BTC-USD","Bitcoin","btcusd"],["ETH-USD","Ethereum","ethusd"]];
   const now=new Date();const yr=now.getUTCFullYear();const mo=String(now.getUTCMonth()+1).padStart(2,"0");const dd=String(now.getUTCDate()).padStart(2,"0");
@@ -67,7 +67,7 @@ if(p==="/auth/login")return authLogin(request,env);
 if(p==="/auth/callback")return authCallback(request,env);
 if(p==="/auth/logout")return authLogout(request,env);
 if(p.startsWith("/api/")){const session=await getSession(request,env);if(!session)return json({error:"unauthorized"},401);
-if(p==="/api/markets")return apiMarkets(env);
+if(p==="/api/markets")return apiMarkets(env,new URL(request.url).searchParams.has("nocache"));
 if(p==="/api/me")return json({email:session.email,name:session.name,picture:session.picture});
 if(p==="/api/todos")return apiData(request,env,session.email,"todos");
 if(p==="/api/projects")return apiData(request,env,session.email,"projects");
