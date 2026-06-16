@@ -197,12 +197,13 @@ function editTracker() {
   api("/api/tracker", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }).then(() => loadTracker());
 }
 
-/* ---------- rental (Blue Gems via Gmail) ---------- */
+/* ---------- rental (Blue Gems via Gmail + portal) ---------- */
+let RENTAL = {};
 async function loadRental() {
   const card = $("#rental-card"); if (!card) return;
   const el = $("#rental");
   try {
-    const d = await api("/api/rental").then((r) => r.json());
+    const d = await api("/api/rental").then((r) => r.json()); RENTAL = d;
     const fmtD = (s) => s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
     const lp = d.lastPayment;
     const payVal = (lp && lp.amount != null) ? ("$" + fmtNum(lp.amount)) : "—";
@@ -215,15 +216,30 @@ async function loadRental() {
     let upCell;
     if (up) { const url = "https://mail.google.com/mail/u/0/#all/" + encodeURIComponent(up.threadId || ""); upCell = '<div class="val" style="font-size:14px"><a href="' + url + '" target="_blank" rel="noopener">' + esc(up.subject || "Open") + ' ↗</a></div><div class="sub">' + fmtD(up.date) + '</div>'; }
     else upCell = '<div class="val" style="font-size:14px">—</div><div class="sub"></div>';
-    $("#rental-status").textContent = "from Gmail";
+    const occVal = (d.occupancy != null) ? (d.occupancy + "%") : "—";
+    const revVal = (d.revenue30d != null) ? ("$" + fmtNum(d.revenue30d)) : "—";
+    const portalSub = d.asOf ? ("portal · " + fmtD(d.asOf)) : "tap edit to set";
+    $("#rental-status").textContent = "Gmail + portal";
     el.innerHTML =
-      '<div class="trk-cell"><div class="lab">Property</div><div class="val" style="font-size:15px">' + esc(d.property || "Rental") + '</div><div class="sub">Blue Gems · Guesty · Topkey</div></div>' +
+      '<div class="trk-cell"><div class="lab">Property</div><div class="val" style="font-size:15px">' + esc(d.property || "Rental") + '</div><div class="sub">Blue Gems · Guesty</div></div>' +
+      '<div class="trk-cell"><div class="lab">Occupancy · 30d <span class="trk-edit" id="rent-edit">✎ edit</span></div><div class="val">' + occVal + '</div><div class="sub">' + portalSub + '</div></div>' +
+      '<div class="trk-cell"><div class="lab">Owner revenue · 30d</div><div class="val">' + revVal + '</div><div class="sub">' + (d.asOf ? "from portal" : "—") + '</div></div>' +
       '<div class="trk-cell"><div class="lab">Last payout</div><div class="val">' + payVal + '</div><div class="sub">' + paySub + '</div></div>' +
       '<div class="trk-cell"><div class="lab">YTD payouts</div><div class="val">' + ytd + '</div><div class="sub">' + (d.paymentCount || 0) + ' payments</div></div>' +
       '<div class="trk-cell"><div class="lab">Latest statement</div><div class="val" style="font-size:14px">' + stVal + '</div><div class="sub">' + stSub + '</div></div>' +
       '<div class="trk-cell" style="flex:1.4"><div class="lab">Latest update</div>' + upCell + '</div>';
+    const reb = $("#rent-edit"); if (reb) reb.onclick = editRental;
     card.hidden = false;
   } catch (e) { el.innerHTML = '<div class="err">Rental unavailable.</div>'; card.hidden = false; }
+}
+function editRental() {
+  const occStr = prompt("Occupancy % over the past 30 days (from the Blue Gems portal):", RENTAL.occupancy != null ? RENTAL.occupancy : "");
+  if (occStr === null) return;
+  const occ = parseFloat(occStr);
+  const revStr = prompt("Owner revenue, past 30 days (e.g. 3633.60):", RENTAL.revenue30d != null ? RENTAL.revenue30d : "");
+  const rev = (revStr !== null && revStr.trim() !== "") ? parseFloat(revStr.replace(/[$,]/g, "")) : null;
+  const body = { occupancy: isNaN(occ) ? null : occ, revenue30d: (rev != null && !isNaN(rev)) ? rev : null, asOf: new Date().toISOString() };
+  api("/api/rental", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(() => loadRental());
 }
 
 /* ---------- shared list store (KV + localStorage cache) ---------- */

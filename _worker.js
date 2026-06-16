@@ -62,6 +62,7 @@ async function apiMarkets(env,force){
   return json({markets,asOf:Date.now(),cached:false});
 }
 async function apiRental(env,token){
+  let manual={};try{const mr=await env.KV.get("config:rental");if(mr)manual=JSON.parse(mr);}catch(e){}
   const search=(q,n)=>gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults="+n+"&q="+encodeURIComponent(q),token).then(r=>r.json());
   const getMsg=(id)=>gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/"+id+"?format=metadata&metadataHeaders=Subject&metadataHeaders=Date",token).then(r=>r.json());
   const hdr=(m,name)=>{const hs=((m.payload&&m.payload.headers)||[]);const h=hs.find(x=>x.name.toLowerCase()===name);return h?h.value:"";};
@@ -82,7 +83,7 @@ async function apiRental(env,token){
   try{const l=await search('from:guesty.com "Owner statement"',3);const id=(l.messages||[])[0]&&l.messages[0].id;if(id){const m=await getMsg(id);lastStatement={period:hdr(m,"subject").replace(/^Owner statement\s*/i,""),date:iso(m),threadId:m.threadId};}}catch(e){}
   let lastUpdate=null;
   try{const l=await search('from:owners@bluegemsmgmt.com "Homeowner Update"',3);const id=(l.messages||[])[0]&&l.messages[0].id;if(id){const m=await getMsg(id);lastUpdate={subject:hdr(m,"subject"),date:iso(m),threadId:m.threadId};}}catch(e){}
-  return json({property:"855 Golden Bear",lastPayment,ytdPayouts:ytd,paymentCount:payCount,lastStatement,lastUpdate});
+  return json({property:"855 Golden Bear",lastPayment,ytdPayouts:ytd,paymentCount:payCount,lastStatement,lastUpdate,occupancy:(manual.occupancy!=null?manual.occupancy:null),revenue30d:(manual.revenue30d!=null?manual.revenue30d:null),asOf:manual.asOf||null});
 }
 async function apiData(req,env,email,kind){const key="data:"+email+":"+kind;if(req.method==="GET"){const raw=await env.KV.get(key);return json({items:raw?JSON.parse(raw):null});}if(req.method==="PUT"){const body=await req.json();await env.KV.put(key,JSON.stringify(body.items||[]));return json({ok:true});}return json({error:"method not allowed"},405);}
 async function apiTracker(env,request){
@@ -118,6 +119,7 @@ if(p==="/api/research"){if(request.method==="PUT"){const b2=await request.json()
 if(p==="/api/config"){if(request.method==="PUT"){const b3=await request.json();await env.KV.put("config:dashboard",JSON.stringify(b3));return json({ok:true});}const raw=await env.KV.get("config:dashboard");return json(raw?JSON.parse(raw):{calDays:14,accent:"#3b66f5",title:"Command Center",hidePanels:[]});}
 if(p==="/api/drafts"){if(request.method==="PUT"){const b4=await request.json();await env.KV.put("drafts:latest",JSON.stringify(b4));return json({ok:true});}const raw=await env.KV.get("drafts:latest");return json(raw?JSON.parse(raw):{updated:null,items:[]});}
 if(p==="/api/tracker")return apiTracker(env,request);
+if(p==="/api/rental"&&request.method==="PUT"){const br=await request.json();await env.KV.put("config:rental",JSON.stringify(br));return json({ok:true});}
 const token=await freshToken(env,session);if(!token)return json({error:"token_expired"},401);
 if(p==="/api/calendar")return apiCalendar(env,token);
 if(p==="/api/gmail")return apiGmail(env,token);
