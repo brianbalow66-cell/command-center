@@ -25,12 +25,13 @@ async function boot() {
   await Promise.all([loadTodos(), loadProjs()]);
   checkReminders(); setInterval(checkReminders, 30000);
 
-  loadMarket(); loadCalendar(); loadMail(); loadResearch();
+  loadMarket(); loadCalendar(); loadMail(); loadResearch(); loadTracker();
   // auto-refresh live data (markets refresh hourly server-side; poll every 15 min to pick up updates)
   setInterval(loadMarket, 15 * 60000);
   setInterval(loadCalendar, 5 * 60000);
   setInterval(loadMail, 3 * 60000);
   setInterval(loadResearch, 10 * 60000);
+  setInterval(loadTracker, 5 * 60000);
 }
 
 /* ---------- markets ---------- */
@@ -144,6 +145,48 @@ function archiveHtml(cat){
   return blocks.length ? blocks.join("") : '<div class="rarch-empty">No earlier entries yet \u2014 history builds up with each morning\u2019s briefing.</div>';
 }
 async function loadResearch(){const el=$("#research");if(!el)return;try{const d=await api("/api/research").then(r=>r.json());await loadArchive();const secs=(d&&d.sections)||[];if(!secs.length){el.className="";el.innerHTML='<div class="empty">No briefing yet \u2014 it updates each morning.</div>';$("#research-status").textContent="";return;}$("#research-status").textContent=d.updated?("updated "+new Date(d.updated).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})):"";el.className="rcols";el.innerHTML=secs.map(s=>'<div class="rsec"><div class="rtitle">'+esc(s.title)+'<a class="rarch-link" href="#" data-cat="'+esc(s.title)+'">archive</a></div><ul class="rlist">'+((s.items)||[]).map(briefItem).join("")+'</ul><div class="rarch" data-cat="'+esc(s.title)+'" hidden></div></div>').join("");}catch(e){el.innerHTML='<div class="err">Briefing unavailable.</div>';}}
+/* ---------- SpaceX tracker ---------- */
+let TRK = {};
+async function loadTracker() {
+  const card = $("#tracker-card"); if (!card) return;
+  const el = $("#trk");
+  try {
+    const d = await api("/api/tracker").then((r) => r.json());
+    const c = d.config || {}; TRK = c;
+    const price = d.price, day = d.changePercent;
+    const dayCls = day != null ? (day >= 0 ? "up" : "down") : "";
+    const dayTxt = day != null ? ((day >= 0 ? "▲ +" : "▼ ") + day.toFixed(2) + "%") : "";
+    $("#trk-status").textContent = d.state === "REGULAR" ? "live" : (price != null ? "last close" : "");
+    const cb = c.costBasis;
+    let plHtml = '<span class="muted">set cost basis</span>';
+    if (cb != null && price != null) { const pl = (price - cb) / cb * 100; const up = pl >= 0; plHtml = '<span class="' + (up ? "up" : "down") + '">' + (up ? "+" : "") + pl.toFixed(1) + "%</span>"; }
+    const cbVal = cb != null ? ("$" + fmtNum(cb)) : "—";
+    const sharesTxt = c.shares ? (" · " + c.shares + " sh") : "";
+    const tgt = (c.targetLow != null && c.targetHigh != null) ? ("$" + fmtNum(c.targetLow) + " – $" + fmtNum(c.targetHigh)) : "—";
+    const tgtAvg = c.targetAvg != null ? ("avg $" + fmtNum(c.targetAvg)) : "";
+    const today = new Date().toISOString().slice(0, 10);
+    const ups = (c.lockups || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
+    const next = ups.find((l) => l.date >= today) || ups[ups.length - 1];
+    const fmtD = (s) => { const dt = new Date(s + "T00:00:00"); return dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); };
+    el.innerHTML =
+      '<div class="trk-cell"><div class="lab">' + esc(c.ticker || "SPCX") + ' · Current</div><div class="val">' + (price != null ? ("$" + fmtNum(price)) : "—") + '</div><div class="sub ' + dayCls + '">' + dayTxt + '</div></div>' +
+      '<div class="trk-cell"><div class="lab">Cost basis <span class="trk-edit" id="trk-edit">✎ edit</span></div><div class="val">' + cbVal + sharesTxt + '</div><div class="sub">P/L ' + plHtml + '</div></div>' +
+      '<div class="trk-cell"><div class="lab">Analyst target · 12 mo</div><div class="val" style="font-size:15px">' + tgt + '</div><div class="sub">' + tgtAvg + '</div></div>' +
+      '<div class="trk-cell" style="flex:1.4"><div class="lab">Next lock-up release</div><div class="val" style="font-size:15px">' + (next ? fmtD(next.date) : "—") + '</div><div class="sub">' + (next ? esc(next.label) : "") + '</div></div>';
+    const eb = $("#trk-edit"); if (eb) eb.onclick = editTracker;
+    card.hidden = false;
+  } catch (e) { el.innerHTML = '<div class="err">Tracker unavailable.</div>'; card.hidden = false; }
+}
+function editTracker() {
+  const cbStr = prompt("Your average cost basis per share (e.g. 135):", TRK.costBasis != null ? TRK.costBasis : "");
+  if (cbStr === null) return;
+  const cb = parseFloat(cbStr);
+  const shStr = prompt("Number of shares (optional):", TRK.shares != null ? TRK.shares : "");
+  const sh = (shStr !== null && shStr.trim() !== "") ? parseInt(shStr, 10) : null;
+  const next = Object.assign({}, TRK, { costBasis: isNaN(cb) ? null : cb, shares: (sh != null && !isNaN(sh)) ? sh : null });
+  api("/api/tracker", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }).then(() => loadTracker());
+}
+
 /* ---------- shared list store (KV + localStorage cache) ---------- */
 function lget(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
 function lset(k, v) { localStorage.setItem(k, JSON.stringify(v)); }

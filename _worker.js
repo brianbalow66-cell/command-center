@@ -62,6 +62,25 @@ async function apiMarkets(env,force){
   return json({markets,asOf:Date.now(),cached:false});
 }
 async function apiData(req,env,email,kind){const key="data:"+email+":"+kind;if(req.method==="GET"){const raw=await env.KV.get(key);return json({items:raw?JSON.parse(raw):null});}if(req.method==="PUT"){const body=await req.json();await env.KV.put(key,JSON.stringify(body.items||[]));return json({ok:true});}return json({error:"method not allowed"},405);}
+async function apiTracker(env,request){
+  const KEY="tracker:spcx";
+  if(request.method==="PUT"){const b=await request.json();await env.KV.put(KEY,JSON.stringify(b));return json({ok:true});}
+  let cfg={};try{const raw=await env.KV.get(KEY);if(raw)cfg=JSON.parse(raw);}catch(e){}
+  const ticker=cfg.ticker||"SPCX";
+  let price=null,changePercent=null,state="";
+  try{
+    const ck="tracker:price:"+ticker;
+    const c=await env.KV.get(ck);
+    if(c){const o=JSON.parse(c);if(Date.now()-o.t<10*60*1000){price=o.price;changePercent=o.cp;state=o.s||"";}}
+    if(price==null){
+      const sig=(()=>{const a=new AbortController();setTimeout(()=>a.abort(),8000);return a.signal;})();
+      const r=await fetch("https://query1.finance.yahoo.com/v8/finance/chart/"+encodeURIComponent(ticker)+"?range=1mo&interval=1d",{headers:{"user-agent":"Mozilla/5.0","accept":"application/json"},signal:sig});
+      if(r.ok){const d=await r.json();const res=d&&d.chart&&d.chart.result&&d.chart.result[0];if(res){const m=res.meta||{};const cl=(res.indicators&&res.indicators.quote&&res.indicators.quote[0]&&res.indicators.quote[0].close)||[];const rows=cl.filter(x=>x!=null);price=(m.regularMarketPrice!=null)?m.regularMarketPrice:(rows.length?rows[rows.length-1]:null);const prev=rows.length>=2?rows[rows.length-2]:(m.chartPreviousClose||null);changePercent=(price!=null&&prev)?((price-prev)/prev*100):null;state=m.marketState||"";}}
+      if(price!=null){await env.KV.put(ck,JSON.stringify({t:Date.now(),price,cp:changePercent,s:state}),{expirationTtl:900});}
+    }
+  }catch(e){}
+  return json({config:cfg,ticker,price,changePercent,state,asOf:Date.now()});
+}
 export default {async fetch(request,env){const p=new URL(request.url).pathname;try{
 if(p==="/auth/login")return authLogin(request,env);
 if(p==="/auth/callback")return authCallback(request,env);
@@ -75,6 +94,7 @@ if(p==="/api/research/archive"){const a=await env.KV.get("research:archive");ret
 if(p==="/api/research"){if(request.method==="PUT"){const b2=await request.json();try{const prev=await env.KV.get("research:latest");if(prev){const pj=JSON.parse(prev);let arr=[];try{const a=await env.KV.get("research:archive");if(a)arr=JSON.parse(a);}catch(e){}if(!arr.length||arr[0].updated!==pj.updated){arr.unshift(pj);}arr=arr.slice(0,30);await env.KV.put("research:archive",JSON.stringify(arr));}}catch(e){}await env.KV.put("research:latest",JSON.stringify(b2));return json({ok:true});}const raw=await env.KV.get("research:latest");return json(raw?JSON.parse(raw):{updated:null,sections:[]});}
 if(p==="/api/config"){if(request.method==="PUT"){const b3=await request.json();await env.KV.put("config:dashboard",JSON.stringify(b3));return json({ok:true});}const raw=await env.KV.get("config:dashboard");return json(raw?JSON.parse(raw):{calDays:14,accent:"#3b66f5",title:"Command Center",hidePanels:[]});}
 if(p==="/api/drafts"){if(request.method==="PUT"){const b4=await request.json();await env.KV.put("drafts:latest",JSON.stringify(b4));return json({ok:true});}const raw=await env.KV.get("drafts:latest");return json(raw?JSON.parse(raw):{updated:null,items:[]});}
+if(p==="/api/tracker")return apiTracker(env,request);
 const token=await freshToken(env,session);if(!token)return json({error:"token_expired"},401);
 if(p==="/api/calendar")return apiCalendar(env,token);
 if(p==="/api/gmail")return apiGmail(env,token);
