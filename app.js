@@ -25,13 +25,14 @@ async function boot() {
   await Promise.all([loadTodos(), loadProjs()]);
   checkReminders(); setInterval(checkReminders, 30000);
 
-  loadMarket(); loadCalendar(); loadMail(); loadResearch(); loadTracker();
+  loadMarket(); loadCalendar(); loadMail(); loadResearch(); loadTracker(); loadRental();
   // auto-refresh live data (markets refresh hourly server-side; poll every 15 min to pick up updates)
   setInterval(loadMarket, 15 * 60000);
   setInterval(loadCalendar, 5 * 60000);
   setInterval(loadMail, 3 * 60000);
   setInterval(loadResearch, 10 * 60000);
   setInterval(loadTracker, 5 * 60000);
+  setInterval(loadRental, 30 * 60000);
 }
 
 /* ---------- markets ---------- */
@@ -194,6 +195,35 @@ function editTracker() {
   const sh = (shStr !== null && shStr.trim() !== "") ? parseInt(shStr, 10) : null;
   const next = Object.assign({}, TRK, { costBasis: isNaN(cb) ? null : cb, shares: (sh != null && !isNaN(sh)) ? sh : null });
   api("/api/tracker", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }).then(() => loadTracker());
+}
+
+/* ---------- rental (Blue Gems via Gmail) ---------- */
+async function loadRental() {
+  const card = $("#rental-card"); if (!card) return;
+  const el = $("#rental");
+  try {
+    const d = await api("/api/rental").then((r) => r.json());
+    const fmtD = (s) => s ? new Date(s).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
+    const lp = d.lastPayment;
+    const payVal = (lp && lp.amount != null) ? ("$" + fmtNum(lp.amount)) : "—";
+    const paySub = (lp && lp.date) ? ("on " + fmtD(lp.date)) : "";
+    const ytd = d.ytdPayouts != null ? ("$" + fmtNum(d.ytdPayouts)) : "—";
+    const st = d.lastStatement;
+    const stVal = (st && st.period) ? esc(st.period) : "—";
+    const stSub = (st && st.date) ? ("received " + fmtD(st.date)) : "";
+    const up = d.lastUpdate;
+    let upCell;
+    if (up) { const url = "https://mail.google.com/mail/u/0/#all/" + encodeURIComponent(up.threadId || ""); upCell = '<div class="val" style="font-size:14px"><a href="' + url + '" target="_blank" rel="noopener">' + esc(up.subject || "Open") + ' ↗</a></div><div class="sub">' + fmtD(up.date) + '</div>'; }
+    else upCell = '<div class="val" style="font-size:14px">—</div><div class="sub"></div>';
+    $("#rental-status").textContent = "from Gmail";
+    el.innerHTML =
+      '<div class="trk-cell"><div class="lab">Property</div><div class="val" style="font-size:15px">' + esc(d.property || "Rental") + '</div><div class="sub">Blue Gems · Guesty · Topkey</div></div>' +
+      '<div class="trk-cell"><div class="lab">Last payout</div><div class="val">' + payVal + '</div><div class="sub">' + paySub + '</div></div>' +
+      '<div class="trk-cell"><div class="lab">YTD payouts</div><div class="val">' + ytd + '</div><div class="sub">' + (d.paymentCount || 0) + ' payments</div></div>' +
+      '<div class="trk-cell"><div class="lab">Latest statement</div><div class="val" style="font-size:14px">' + stVal + '</div><div class="sub">' + stSub + '</div></div>' +
+      '<div class="trk-cell" style="flex:1.4"><div class="lab">Latest update</div>' + upCell + '</div>';
+    card.hidden = false;
+  } catch (e) { el.innerHTML = '<div class="err">Rental unavailable.</div>'; card.hidden = false; }
 }
 
 /* ---------- shared list store (KV + localStorage cache) ---------- */

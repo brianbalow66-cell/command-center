@@ -62,7 +62,10 @@ header.top h1 span{color:var(--accent)}
 /* three bands: markets / briefing / 4-panel row */
 .band-markets{flex:0 0 auto}
 .band-tracker{flex:0 0 auto}
-#trk{display:flex;flex-wrap:wrap;gap:10px}
+.band-rental{flex:0 0 auto}
+#trk,#rental{display:flex;flex-wrap:wrap;gap:10px}
+.trk-cell .val a{color:var(--accent)}
+.trk-cell .val a:hover{filter:brightness(1.1)}
 .trk-cell{flex:1 1 0;min-width:150px;border:1px solid var(--line);border-radius:11px;padding:8px 12px;background:linear-gradient(180deg,#121823,#0d121a)}
 .trk-cell .lab{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.3px;text-transform:uppercase;display:flex;align-items:center;gap:6px}
 .trk-cell .val{font-size:18px;font-weight:700;color:#fff;margin-top:3px;font-variant-numeric:tabular-nums;letter-spacing:-.3px}

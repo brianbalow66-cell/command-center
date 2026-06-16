@@ -61,6 +61,28 @@ async function apiMarkets(env,force){
   try{await env.KV.put(CACHE,JSON.stringify({t:Date.now(),markets}),{expirationTtl:3600});}catch(e){}
   return json({markets,asOf:Date.now(),cached:false});
 }
+async function apiRental(env,token){
+  const search=(q,n)=>gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults="+n+"&q="+encodeURIComponent(q),token).then(r=>r.json());
+  const getMsg=(id)=>gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/"+id+"?format=metadata&metadataHeaders=Subject&metadataHeaders=Date",token).then(r=>r.json());
+  const hdr=(m,name)=>{const hs=((m.payload&&m.payload.headers)||[]);const h=hs.find(x=>x.name.toLowerCase()===name);return h?h.value:"";};
+  const iso=(m)=>m.internalDate?new Date(parseInt(m.internalDate,10)).toISOString():null;
+  let lastPayment=null,ytd=0,payCount=0;
+  try{
+    const l=await search('from:topkey.io "owner payment"',20);
+    const ids=(l.messages||[]).map(m=>m.id);
+    const msgs=await Promise.all(ids.map(getMsg));
+    const yr=new Date().getUTCFullYear();
+    const pays=msgs.map(m=>{const amt=parseFloat((((m.snippet||"").match(/\$([0-9,]+(?:\.[0-9]{1,2})?)/)||[])[1]||"").replace(/,/g,""));return {amount:isNaN(amt)?null:amt,date:iso(m)};}).filter(p=>p.amount!=null);
+    pays.sort((a,b)=>(a.date<b.date?1:-1));
+    payCount=pays.length;lastPayment=pays[0]||null;
+    ytd=pays.filter(p=>p.date&&new Date(p.date).getUTCFullYear()===yr).reduce((s,p)=>s+p.amount,0);
+  }catch(e){}
+  let lastStatement=null;
+  try{const l=await search('from:guesty.com "Owner statement"',3);const id=(l.messages||[])[0]&&l.messages[0].id;if(id){const m=await getMsg(id);lastStatement={period:hdr(m,"subject").replace(/^Owner statement\s*/i,""),date:iso(m),threadId:m.threadId};}}catch(e){}
+  let lastUpdate=null;
+  try{const l=await search('from:owners@bluegemsmgmt.com "Homeowner Update"',3);const id=(l.messages||[])[0]&&l.messages[0].id;if(id){const m=await getMsg(id);lastUpdate={subject:hdr(m,"subject"),date:iso(m),threadId:m.threadId};}}catch(e){}
+  return json({property:"855 Golden Bear",lastPayment,ytdPayouts:ytd,paymentCount:payCount,lastStatement,lastUpdate});
+}
 async function apiData(req,env,email,kind){const key="data:"+email+":"+kind;if(req.method==="GET"){const raw=await env.KV.get(key);return json({items:raw?JSON.parse(raw):null});}if(req.method==="PUT"){const body=await req.json();await env.KV.put(key,JSON.stringify(body.items||[]));return json({ok:true});}return json({error:"method not allowed"},405);}
 async function apiTracker(env,request){
   const KEY="tracker:spcx";
@@ -98,5 +120,6 @@ if(p==="/api/tracker")return apiTracker(env,request);
 const token=await freshToken(env,session);if(!token)return json({error:"token_expired"},401);
 if(p==="/api/calendar")return apiCalendar(env,token);
 if(p==="/api/gmail")return apiGmail(env,token);
+if(p==="/api/rental")return apiRental(env,token);
 return json({error:"not found"},404);}
 return env.ASSETS.fetch(request);}catch(err){return json({error:String((err&&err.message)||err)},500);}}};
