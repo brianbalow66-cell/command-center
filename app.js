@@ -215,15 +215,38 @@ function drawChart() {
   if (pchart) { pchart.data.datasets[0].data = [done, 100 - done]; pchart.update(); }
   else pchart = new Chart(cv, { type: "doughnut", data: { labels: ["Done", "Left"], datasets: [{ data: [done, 100 - done], backgroundColor: ["#34d77f", "#1a222e"], borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false, cutout: "72%", plugins: { legend: { display: false }, tooltip: { enabled: false } } } });
 }
+function projStatusChip(s) {
+  s = STATUSES.indexOf(s) >= 0 ? s : "active";
+  const cls = { active: "st-active", waiting: "st-waiting", hold: "st-hold" }[s];
+  return '<span class="tstatus ' + cls + '" data-act="ptstatus" title="Click to change status">' + s + "</span>";
+}
+function addProjTask(projId, input) {
+  const tx = input.value.trim(); if (!tx) return;
+  const p = PROJS.find((x) => x.id === projId); if (!p) return;
+  if (!p.tasks) p.tasks = [];
+  p.tasks.push({ id: "pt" + Date.now() + "" + Math.floor(Math.random() * 99), text: tx, status: "active", done: false });
+  input.value = ""; persistProjs(); renderProjs();
+}
 function renderProjs() {
   const el = $("#projs");
   $("#proj-avg").textContent = PROJS.length ? Math.round(PROJS.reduce((s, p) => s + (+p.pct || 0), 0) / PROJS.length) + "% avg" : "";
-  el.innerHTML = PROJS.length ? PROJS.map((p) =>
-    '<div class="proj" data-id="' + p.id + '"><div class="ph"><div class="pn">' + esc(p.name) +
-    '</div><div style="display:flex;align-items:center;gap:8px"><span class="pv">' + (+p.pct) + '%</span>' +
-    '<button class="del" data-act="pdel" title="Remove">&times;</button></div></div><div class="bar"><i style="width:' + (+p.pct) +
-    '%"></i></div><div class="prng"><input type="range" min="0" max="100" step="5" value="' + (+p.pct) + '" data-act="prng"></div></div>'
-  ).join("") : '<div class="empty">No projects. Add one above.</div>';
+  el.innerHTML = PROJS.length ? PROJS.map((p) => {
+    const tasks = p.tasks || [];
+    const openT = tasks.filter((t) => !t.done).length;
+    const tasksHtml = tasks.length ? tasks.map((t) =>
+      '<div class="ptask ' + (t.done ? "done" : "") + '" data-tid="' + t.id + '"><input type="checkbox" ' + (t.done ? "checked" : "") +
+      ' data-act="ptchk">' + projStatusChip(t.status) + '<span class="ptt">' + esc(t.text) +
+      '</span><button class="del" data-act="ptdel" title="Delete task">&times;</button></div>'
+    ).join("") : '<div class="ptask-empty">No tasks yet.</div>';
+    return '<div class="proj" data-id="' + p.id + '"><div class="ph"><div class="pn">' + esc(p.name) +
+      '</div><div style="display:flex;align-items:center;gap:8px"><span class="pv">' + (+p.pct) + '%</span>' +
+      '<button class="del" data-act="pdel" title="Remove project">&times;</button></div></div>' +
+      '<div class="bar"><i style="width:' + (+p.pct) + '%"></i></div>' +
+      '<div class="prng"><input type="range" min="0" max="100" step="5" value="' + (+p.pct) + '" data-act="prng"></div>' +
+      '<div class="ptasks">' + tasksHtml + '</div>' +
+      '<div class="ptadd"><input type="text" class="ptadd-in" placeholder="Add task under ' + esc(p.name) + '…" maxlength="120">' +
+      '<button class="btn ghost ptadd-btn" data-act="ptadd">Add</button></div></div>';
+  }).join("") : '<div class="empty">No projects. Add one above.</div>';
   drawChart();
 }
 
@@ -281,10 +304,36 @@ document.addEventListener("DOMContentLoaded", () => {
   };
   $("#p-name").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#p-add").click(); });
   $("#projs").addEventListener("input", (e) => {
-    if (e.target.dataset.act === "prng") { const id = e.target.closest(".proj").dataset.id; const p = PROJS.find((x) => x.id === id); if (p) { p.pct = +e.target.value; persistProjs(); renderProjs(); } }
+    if (e.target.dataset.act === "prng") {
+      const projEl = e.target.closest(".proj"); const p = PROJS.find((x) => x.id === projEl.dataset.id);
+      if (p) {
+        p.pct = +e.target.value;
+        const bar = projEl.querySelector(".bar > i"); if (bar) bar.style.width = p.pct + "%";
+        const pv = projEl.querySelector(".pv"); if (pv) pv.textContent = p.pct + "%";
+        $("#proj-avg").textContent = PROJS.length ? Math.round(PROJS.reduce((s, x) => s + (+x.pct || 0), 0) / PROJS.length) + "% avg" : "";
+        drawChart(); persistProjs();
+      }
+    }
+  });
+  $("#projs").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.classList.contains("ptadd-in")) { const projEl = e.target.closest(".proj"); if (projEl) addProjTask(projEl.dataset.id, e.target); }
   });
   $("#projs").addEventListener("click", (e) => {
-    if (e.target.dataset.act === "pdel") { const id = e.target.closest(".proj").dataset.id; PROJS = PROJS.filter((x) => x.id !== id); persistProjs(); renderProjs(); }
+    const b = e.target.closest("[data-act]"); const projEl = e.target.closest(".proj"); if (!projEl) return;
+    const pid = projEl.dataset.id; const p = PROJS.find((x) => x.id === pid);
+    if (!b) return;
+    const act = b.dataset.act;
+    if (act === "pdel") { PROJS = PROJS.filter((x) => x.id !== pid); persistProjs(); renderProjs(); return; }
+    if (act === "ptadd") { const inp = projEl.querySelector(".ptadd-in"); if (inp) addProjTask(pid, inp); return; }
+    const taskEl = e.target.closest(".ptask");
+    if (taskEl && p) {
+      const tid = taskEl.dataset.tid; const t = (p.tasks || []).find((x) => x.id === tid);
+      if (act === "ptchk") { if (t) t.done = !t.done; }
+      else if (act === "ptstatus") { if (t) { const i = STATUSES.indexOf(t.status || "active"); t.status = STATUSES[(i + 1) % STATUSES.length]; } }
+      else if (act === "ptdel") { p.tasks = (p.tasks || []).filter((x) => x.id !== tid); }
+      else return;
+      persistProjs(); renderProjs();
+    }
   });
   boot();
 });
