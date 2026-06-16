@@ -74,8 +74,9 @@ async function apiRental(env,token){
     const yr=new Date().getUTCFullYear();
     const pays=msgs.map(m=>{const amt=parseFloat((((m.snippet||"").match(/\$([0-9,]+(?:\.[0-9]{1,2})?)/)||[])[1]||"").replace(/,/g,""));return {amount:isNaN(amt)?null:amt,date:iso(m)};}).filter(p=>p.amount!=null);
     pays.sort((a,b)=>(a.date<b.date?1:-1));
-    payCount=pays.length;lastPayment=pays[0]||null;
-    ytd=pays.filter(p=>p.date&&new Date(p.date).getUTCFullYear()===yr).reduce((s,p)=>s+p.amount,0);
+    lastPayment=pays[0]||null;
+    const ytdPays=pays.filter(p=>p.date&&new Date(p.date).getUTCFullYear()===yr);
+    ytd=ytdPays.reduce((s,p)=>s+p.amount,0);payCount=ytdPays.length;
   }catch(e){}
   let lastStatement=null;
   try{const l=await search('from:guesty.com "Owner statement"',3);const id=(l.messages||[])[0]&&l.messages[0].id;if(id){const m=await getMsg(id);lastStatement={period:hdr(m,"subject").replace(/^Owner statement\s*/i,""),date:iso(m),threadId:m.threadId};}}catch(e){}
