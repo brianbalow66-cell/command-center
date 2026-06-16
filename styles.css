@@ -42,6 +42,10 @@ header.top h1 span{color:var(--accent)}
 .userbox{display:flex;align-items:center;gap:12px}
 .clock{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12.5px}
 .clock b{color:#fff;font-weight:600}
+.cowork-btn{display:inline-flex;align-items:center;gap:5px;background:var(--accent);color:#06140c;
+  font-weight:700;font-size:12px;padding:6px 13px;border-radius:20px;box-shadow:0 3px 12px rgba(52,215,127,.30);transition:filter .15s ease,transform .08s ease}
+.cowork-btn:hover{filter:brightness(1.07)}
+.cowork-btn:active{transform:translateY(1px)}
 .avatar{width:28px;height:28px;border-radius:50%;border:1px solid var(--line2)}
 .logout{font-size:19px;color:var(--muted);line-height:1}
 .logout:hover{color:var(--red)}
