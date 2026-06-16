@@ -130,7 +130,20 @@ function briefItem(it){
   if(u){return '<li><a href="'+esc(u)+'" target="_blank" rel="noopener">'+esc(t)+'<span class="ext">\u2197</span></a></li>';}
   return "<li>"+esc(t)+"</li>";
 }
-async function loadResearch(){const el=$("#research");if(!el)return;try{const d=await api("/api/research").then(r=>r.json());const secs=(d&&d.sections)||[];if(!secs.length){el.className="";el.innerHTML='<div class="empty">No briefing yet \u2014 it updates each morning.</div>';$("#research-status").textContent="";return;}$("#research-status").textContent=d.updated?("updated "+new Date(d.updated).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})):"";el.className="rcols";el.innerHTML=secs.map(s=>'<div class="rsec"><div class="rtitle">'+esc(s.title)+'</div><ul class="rlist">'+((s.items)||[]).map(briefItem).join("")+'</ul></div>').join("");}catch(e){el.innerHTML='<div class="err">Briefing unavailable.</div>';}}
+let ARCHIVE = [];
+async function loadArchive(){ try{ const d = await api("/api/research/archive").then((r)=>r.json()); ARCHIVE = d.entries || []; }catch(e){ ARCHIVE = []; } }
+function archiveHtml(cat){
+  const blocks = [];
+  ARCHIVE.forEach((entry)=>{
+    const sec = (entry.sections||[]).find((s)=>s.title===cat);
+    if (sec && sec.items && sec.items.length){
+      const date = entry.updated ? new Date(entry.updated).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+      blocks.push('<div class="rarch-day"><div class="rarch-date">'+esc(date)+'</div><ul class="rlist">'+sec.items.map(briefItem).join("")+'</ul></div>');
+    }
+  });
+  return blocks.length ? blocks.join("") : '<div class="rarch-empty">No earlier entries yet \u2014 history builds up with each morning\u2019s briefing.</div>';
+}
+async function loadResearch(){const el=$("#research");if(!el)return;try{const d=await api("/api/research").then(r=>r.json());await loadArchive();const secs=(d&&d.sections)||[];if(!secs.length){el.className="";el.innerHTML='<div class="empty">No briefing yet \u2014 it updates each morning.</div>';$("#research-status").textContent="";return;}$("#research-status").textContent=d.updated?("updated "+new Date(d.updated).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})):"";el.className="rcols";el.innerHTML=secs.map(s=>'<div class="rsec"><div class="rtitle">'+esc(s.title)+'<a class="rarch-link" href="#" data-cat="'+esc(s.title)+'">archive</a></div><ul class="rlist">'+((s.items)||[]).map(briefItem).join("")+'</ul><div class="rarch" data-cat="'+esc(s.title)+'" hidden></div></div>').join("");}catch(e){el.innerHTML='<div class="err">Briefing unavailable.</div>';}}
 /* ---------- shared list store (KV + localStorage cache) ---------- */
 function lget(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
 function lset(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
@@ -253,6 +266,15 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   const archToggle = $("#arch-toggle");
   if (archToggle) archToggle.addEventListener("click", (e) => { e.preventDefault(); SHOW_ARCHIVED = !SHOW_ARCHIVED; renderTodos(); });
+  const research = $("#research");
+  if (research) research.addEventListener("click", (e) => {
+    const a = e.target.closest(".rarch-link"); if (!a) return; e.preventDefault();
+    const cat = a.dataset.cat;
+    const panel = a.closest(".rsec").querySelector(".rarch");
+    if (!panel) return;
+    if (panel.hidden) { panel.innerHTML = archiveHtml(cat); panel.hidden = false; a.textContent = "hide"; }
+    else { panel.hidden = true; a.textContent = "archive"; }
+  });
   $("#p-add").onclick = () => {
     const nm = $("#p-name").value.trim(); if (!nm) return;
     PROJS.push({ id: "p" + Date.now(), name: nm, pct: 0 }); $("#p-name").value = ""; persistProjs(); renderProjs();
