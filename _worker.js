@@ -20,28 +20,44 @@ async function apiGmail(env,token){const list=await gfetch("https://gmail.google
 async function apiMarkets(env){
   const CACHE="markets:cache";
   try{const c=await env.KV.get(CACHE);if(c){const o=JSON.parse(c);if(Date.now()-o.t<55*60*1000)return json({markets:o.markets,asOf:o.t,cached:true});}}catch(e){}
-  const SYMS=[["^GSPC","S&P 500"],["^DJI","Dow Jones"],["^IXIC","Nasdaq"],["GC=F","Gold"],["BTC-USD","Bitcoin"],["ETH-USD","Ethereum"]];
-  const now=new Date();const yr=now.getUTCFullYear();const mo=String(now.getUTCMonth()+1).padStart(2,"0");
+  // [yahooSymbol, displayName, stooqSymbol]
+  const SYMS=[["^GSPC","S&P 500","^spx"],["^DJI","Dow Jones","^dji"],["^IXIC","Nasdaq","^ndq"],["GC=F","Gold","xauusd"],["BTC-USD","Bitcoin","btcusd"],["ETH-USD","Ethereum","ethusd"]];
+  const now=new Date();const yr=now.getUTCFullYear();const mo=String(now.getUTCMonth()+1).padStart(2,"0");const dd=String(now.getUTCDate()).padStart(2,"0");
   const monthStart=yr+"-"+mo+"-01";const yearStart=yr+"-01-01";
   const pc=(p,ref)=>(p!=null&&ref!=null&&ref!==0)?((p-ref)/ref*100):null;
-  async function one(sym,name){
-    try{
-      const url="https://query1.finance.yahoo.com/v8/finance/chart/"+encodeURIComponent(sym)+"?range=1y&interval=1d";
-      const r=await fetch(url,{headers:{"user-agent":"Mozilla/5.0","accept":"application/json"}});
-      if(!r.ok)throw new Error("http "+r.status);
-      const d=await r.json();const res=d&&d.chart&&d.chart.result&&d.chart.result[0];if(!res)throw new Error("no result");
-      const m=res.meta||{};const price=(m.regularMarketPrice!=null)?m.regularMarketPrice:null;
-      const ts=res.timestamp||[];const cl=(res.indicators&&res.indicators.quote&&res.indicators.quote[0]&&res.indicators.quote[0].close)||[];
-      const rows=[];for(let i=0;i<ts.length;i++){if(cl[i]!=null)rows.push([new Date(ts[i]*1000).toISOString().slice(0,10),cl[i]]);}
-      const lastDate=rows.length?rows[rows.length-1][0]:null;
-      const mktDate=m.regularMarketTime?new Date(m.regularMarketTime*1000).toISOString().slice(0,10):lastDate;
-      let prevClose=null;
-      if(rows.length){prevClose=(lastDate===mktDate&&rows.length>=2)?rows[rows.length-2][1]:rows[rows.length-1][1];}
-      const findBefore=(d0)=>{for(let i=rows.length-1;i>=0;i--){if(rows[i][0]<d0)return rows[i][1];}return null;};
-      return {symbol:sym,name,price,changePercent:pc(price,prevClose),mtd:pc(price,findBefore(monthStart)),ytd:pc(price,findBefore(yearStart)),state:m.marketState||""};
-    }catch(e){return {symbol:sym,name,price:null,changePercent:null,mtd:null,ytd:null,state:""};}
+  const findBefore=(rows,d0)=>{for(let i=rows.length-1;i>=0;i--){if(rows[i][0]<d0)return rows[i][1];}return null;};
+  const TO=(ms)=>{const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal;};
+  async function yahoo(sym){
+    const url="https://query1.finance.yahoo.com/v8/finance/chart/"+encodeURIComponent(sym)+"?range=1y&interval=1d";
+    const r=await fetch(url,{headers:{"user-agent":"Mozilla/5.0","accept":"application/json"},signal:TO(8000)});
+    if(!r.ok)throw new Error("y"+r.status);
+    const d=await r.json();const res=d&&d.chart&&d.chart.result&&d.chart.result[0];if(!res)throw new Error("ynores");
+    const m=res.meta||{};const price=(m.regularMarketPrice!=null)?m.regularMarketPrice:null;
+    const ts=res.timestamp||[];const cl=(res.indicators&&res.indicators.quote&&res.indicators.quote[0]&&res.indicators.quote[0].close)||[];
+    const rows=[];for(let i=0;i<ts.length;i++){if(cl[i]!=null)rows.push([new Date(ts[i]*1000).toISOString().slice(0,10),cl[i]]);}
+    if(price==null||!rows.length)throw new Error("yempty");
+    const lastDate=rows[rows.length-1][0];
+    const mktDate=m.regularMarketTime?new Date(m.regularMarketTime*1000).toISOString().slice(0,10):lastDate;
+    const prevClose=(lastDate===mktDate&&rows.length>=2)?rows[rows.length-2][1]:rows[rows.length-1][1];
+    return {price,prevClose,rows,state:m.marketState||""};
   }
-  const markets=await Promise.all(SYMS.map(s=>one(s[0],s[1])));
+  async function stooq(scode){
+    const hurl="https://stooq.com/q/d/l/?s="+encodeURIComponent(scode)+"&i=d&d1="+(yr-1)+"1201&d2="+yr+mo+dd;
+    const hr=await fetch(hurl,{signal:TO(8000)});const ht=await hr.text();
+    const lines=ht.trim().split(/\r?\n/);const rows=[];
+    for(let i=1;i<lines.length;i++){const p=lines[i].split(",");if(p.length>=5){const c=parseFloat(p[4]);if(!isNaN(c))rows.push([p[0],c]);}}
+    if(!rows.length)throw new Error("sempty");
+    let price=rows[rows.length-1][1];let prevClose=rows.length>=2?rows[rows.length-2][1]:null;
+    try{const lr=await fetch("https://stooq.com/q/l/?s="+encodeURIComponent(scode)+"&f=sd2t2c&e=csv",{signal:TO(6000)});const lt=(await lr.text()).trim().split(/\r?\n/);const lp=lt[lt.length-1].split(",");const lc=parseFloat(lp[lp.length-1]);if(!isNaN(lc)&&lc>0){price=lc;prevClose=rows[rows.length-1][1];}}catch(e){}
+    return {price,prevClose,rows,state:""};
+  }
+  async function one(yh,name,sc){
+    let data=null;
+    try{data=await yahoo(yh);}catch(e){try{data=await stooq(sc);}catch(e2){data=null;}}
+    if(!data||data.price==null)return {symbol:yh,name,price:null,changePercent:null,mtd:null,ytd:null,state:""};
+    return {symbol:yh,name,price:data.price,changePercent:pc(data.price,data.prevClose),mtd:pc(data.price,findBefore(data.rows,monthStart)),ytd:pc(data.price,findBefore(data.rows,yearStart)),state:data.state};
+  }
+  const markets=await Promise.all(SYMS.map(s=>one(s[0],s[1],s[2])));
   try{await env.KV.put(CACHE,JSON.stringify({t:Date.now(),markets}),{expirationTtl:3600});}catch(e){}
   return json({markets,asOf:Date.now(),cached:false});
 }
