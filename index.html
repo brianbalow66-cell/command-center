@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#3b66f5">
+<meta name="theme-color" content="#06080c">
 <title>Command Center</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -33,24 +33,26 @@
       <a class="logout" href="/auth/logout" title="Sign out">&#8631;</a>
     </div>
   </header>
-  <div class="grid">
-    <section class="card col-12">
-      <h2>Markets <span class="badge" id="mkt-status"></span></h2>
-      <div id="mkt"><div class="loading">Loading markets&hellip;</div></div>
-    </section>
-    <section class="card col-12">
-      <h2>Daily Briefing <span class="badge" id="research-status"></span></h2>
-      <div id="research"><div class="loading">Loading briefing&hellip;</div></div>
-    </section>
-    <section class="card col-6">
+  <section class="card band-markets">
+    <h2>Markets <span class="badge" id="mkt-status"></span></h2>
+    <div id="mkt"><div class="loading">Loading markets&hellip;</div></div>
+  </section>
+
+  <section class="card band-brief">
+    <h2>Daily Briefing <span class="badge" id="research-status"></span></h2>
+    <div id="research"><div class="loading">Loading briefing&hellip;</div></div>
+  </section>
+
+  <div class="grid4">
+    <section class="card">
       <h2>Upcoming &middot; Next <span id="cal-days">14</span> Days <span class="badge" id="cal-status"></span></h2>
       <div class="scroll" id="cal"><div class="loading">Loading calendar&hellip;</div></div>
     </section>
-    <section class="card col-6">
+    <section class="card">
       <h2>Inbox <span class="badge" id="mail-status"></span></h2>
       <div class="scroll" id="mail"><div class="loading">Loading mail&hellip;</div></div>
     </section>
-    <section class="card col-6">
+    <section class="card">
       <h2>To-Do &amp; Reminders <span class="badge" id="todo-count"></span></h2>
       <div class="addrow">
         <input type="text" id="t-text" placeholder="Add a task&hellip;" maxlength="140">
@@ -60,19 +62,18 @@
       <div class="scroll" id="todos"></div>
       <div class="notice" id="notif-note"></div>
     </section>
-    <section class="card col-6">
+    <section class="card">
       <h2>Projects <span class="badge" id="proj-avg"></span></h2>
       <div class="addrow">
         <input type="text" id="p-name" placeholder="New project&hellip;" maxlength="60">
         <button class="btn ghost" id="p-add">Add</button>
       </div>
       <div class="proj-wrap">
-        <div class="proj-list"><div class="scroll" id="projs"></div></div>
-        <div class="proj-chart"><canvas id="pchart" height="120"></canvas></div>
+        <div class="proj-list"><div id="projs"></div></div>
+        <div class="proj-chart"><canvas id="pchart" height="78"></canvas></div>
       </div>
     </section>
   </div>
-  <div class="footnote">Live data refreshes automatically every few minutes. Pull to refresh on mobile.</div>
 </div>
 
 <script src="/app.js"></script>
