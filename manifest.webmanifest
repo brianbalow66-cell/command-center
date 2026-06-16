@@ -1,0 +1,17 @@
+{
+  "name": "Command Center",
+  "short_name": "Command",
+  "description": "Your calendar, inbox, markets, to-dos and projects in one place.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#3b66f5",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
