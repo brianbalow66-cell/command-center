@@ -168,9 +168,18 @@ async function loadTracker() {
     const ups = (c.lockups || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
     const next = ups.find((l) => l.date >= today) || ups[ups.length - 1];
     const fmtD = (s) => { const dt = new Date(s + "T00:00:00"); return dt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); };
+    let posVal = "—", posSub = "";
+    if (price != null && c.shares) {
+      posVal = "$" + fmtNum(price * c.shares);
+      if (cb != null) {
+        const g = (price - cb) * c.shares; const up = g >= 0; const pl = (price - cb) / cb * 100;
+        posSub = '<span class="' + (up ? "up" : "down") + '">' + (up ? "+" : "−") + "$" + fmtNum(Math.abs(g)) + " (" + (up ? "+" : "") + pl.toFixed(1) + "%)</span>";
+      }
+    }
     el.innerHTML =
       '<div class="trk-cell"><div class="lab">' + esc(c.ticker || "SPCX") + ' · Current</div><div class="val">' + (price != null ? ("$" + fmtNum(price)) : "—") + '</div><div class="sub ' + dayCls + '">' + dayTxt + '</div></div>' +
       '<div class="trk-cell"><div class="lab">Cost basis <span class="trk-edit" id="trk-edit">✎ edit</span></div><div class="val">' + cbVal + sharesTxt + '</div><div class="sub">P/L ' + plHtml + '</div></div>' +
+      '<div class="trk-cell"><div class="lab">Position value</div><div class="val" style="font-size:16px">' + posVal + '</div><div class="sub">Unrealized ' + (posSub || "—") + '</div></div>' +
       '<div class="trk-cell"><div class="lab">Analyst target · 12 mo</div><div class="val" style="font-size:15px">' + tgt + '</div><div class="sub">' + tgtAvg + '</div></div>' +
       '<div class="trk-cell" style="flex:1.4"><div class="lab">Next lock-up release</div><div class="val" style="font-size:15px">' + (next ? fmtD(next.date) : "—") + '</div><div class="sub">' + (next ? esc(next.label) : "") + '</div></div>';
     const eb = $("#trk-edit"); if (eb) eb.onclick = editTracker;
