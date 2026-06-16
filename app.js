@@ -26,8 +26,8 @@ async function boot() {
   checkReminders(); setInterval(checkReminders, 30000);
 
   loadMarket(); loadCalendar(); loadMail(); loadResearch();
-  // auto-refresh live data
-  setInterval(loadMarket, 60000);
+  // auto-refresh live data (markets refresh hourly server-side; poll every 15 min to pick up updates)
+  setInterval(loadMarket, 15 * 60000);
   setInterval(loadCalendar, 5 * 60000);
   setInterval(loadMail, 3 * 60000);
   setInterval(loadResearch, 10 * 60000);
@@ -35,20 +35,27 @@ async function boot() {
 
 /* ---------- markets ---------- */
 const fmtNum = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
+function pctSpan(v) {
+  if (v == null) return '<span class="muted">—</span>';
+  const up = v >= 0;
+  return '<span class="' + (up ? "up" : "down") + '">' + (up ? "+" : "") + v.toFixed(2) + "%</span>";
+}
 async function loadMarket() {
   const el = $("#mkt");
   try {
     const d = await api("/api/markets").then((r) => r.json());
     const arr = d.markets || [];
-    $("#mkt-status").textContent = "live";
+    const anyLive = arr.some((q) => q.state === "REGULAR");
+    $("#mkt-status").textContent = arr.every((q) => q.price == null) ? "" : (anyLive ? "live" : "last close");
     el.className = "mkt";
     el.innerHTML = arr.map((q) => {
       const px = q.price != null ? fmtNum(q.price) : "—";
-      const ch = q.change, chp = q.changePercent;
-      const up = ch != null ? ch >= 0 : true;
-      const chTxt = ch != null ? ((up ? "+" : "") + fmtNum(ch) + (chp != null ? "  (" + (up ? "+" : "") + chp.toFixed(2) + "%)" : "")) : "";
+      const day = q.changePercent;
+      const up = day != null ? day >= 0 : true;
+      const dayTxt = day != null ? ((up ? "▲ +" : "▼ ") + day.toFixed(2) + "%") : "";
       return '<div class="tile"><div class="nm">' + esc(q.name) + '</div><div class="px">' + px +
-        '</div><div class="ch ' + (up ? "up" : "down") + '">' + chTxt + "</div></div>";
+        '</div><div class="ch ' + (up ? "up" : "down") + '">' + dayTxt + ' <span class="lbl">today</span></div>' +
+        '<div class="mty">MTD ' + pctSpan(q.mtd) + ' &middot; YTD ' + pctSpan(q.ytd) + "</div></div>";
     }).join("");
   } catch (err) { el.innerHTML = '<div class="err">Markets unavailable.</div>'; }
 }

@@ -17,7 +17,34 @@ async function authLogout(req,env){const s=await getSession(req,env);if(s)await 
 async function getConfig(env){try{const raw=await env.KV.get("config:dashboard");return raw?JSON.parse(raw):{};}catch(e){return {};}}
 async function apiCalendar(env,token){const cfg=await getConfig(env);const now=new Date(),end=new Date(Date.now()+(cfg.calDays||14)*864e5);const u=new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");u.searchParams.set("timeMin",now.toISOString());u.searchParams.set("timeMax",end.toISOString());u.searchParams.set("singleEvents","true");u.searchParams.set("orderBy","startTime");u.searchParams.set("maxResults","25");const d=await gfetch(u.toString(),token).then(r=>r.json());return json({events:(d.items||[]).map(e=>({summary:e.summary||"(no title)",location:e.location||"",eventType:e.eventType||"default",start:e.start||{},end:e.end||{},status:e.status}))});}
 async function apiGmail(env,token){const list=await gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in%3Ainbox&maxResults=12",token).then(r=>r.json());const ids=(list.messages||[]).map(m=>m.id);const msgs=await Promise.all(ids.map(id=>gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/"+id+"?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date",token).then(r=>r.json())));return json({messages:msgs.map(m=>{const hs=((m.payload&&m.payload.headers)||[]).reduce((a,h)=>{a[h.name.toLowerCase()]=h.value;return a;},{});return {sender:hs.from||"",subject:hs.subject||"(no subject)",date:hs.date?new Date(hs.date).toISOString():null,snippet:m.snippet||"",labelIds:m.labelIds||[]};})});}
-async function apiMarkets(env){const symbols=(env.STOCK_SYMBOLS||"GSPC,DJI,IXIC,BTC/USD,ETH/USD").split(",").map(s=>s.trim());const names={GSPC:"S&P 500",DJI:"Dow Jones",IXIC:"Nasdaq","BTC/USD":"Bitcoin","ETH/USD":"Ethereum"};const u=new URL("https://api.twelvedata.com/quote");u.searchParams.set("symbol",symbols.join(","));u.searchParams.set("apikey",env.STOCK_API_KEY||"");const d=await fetch(u.toString()).then(r=>r.json());return json({markets:symbols.map(sym=>{const q=symbols.length===1?d:(d[sym]||{});const price=parseFloat(q.close),change=parseFloat(q.change),pct=parseFloat(q.percent_change);return {symbol:sym,name:names[sym]||sym,price:isNaN(price)?null:price,change:isNaN(change)?null:change,changePercent:isNaN(pct)?null:pct};})});}
+async function apiMarkets(env){
+  const CACHE="markets:cache";
+  try{const c=await env.KV.get(CACHE);if(c){const o=JSON.parse(c);if(Date.now()-o.t<55*60*1000)return json({markets:o.markets,asOf:o.t,cached:true});}}catch(e){}
+  const SYMS=[["^GSPC","S&P 500"],["^DJI","Dow Jones"],["^IXIC","Nasdaq"],["GC=F","Gold"],["BTC-USD","Bitcoin"],["ETH-USD","Ethereum"]];
+  const now=new Date();const yr=now.getUTCFullYear();const mo=String(now.getUTCMonth()+1).padStart(2,"0");
+  const monthStart=yr+"-"+mo+"-01";const yearStart=yr+"-01-01";
+  const pc=(p,ref)=>(p!=null&&ref!=null&&ref!==0)?((p-ref)/ref*100):null;
+  async function one(sym,name){
+    try{
+      const url="https://query1.finance.yahoo.com/v8/finance/chart/"+encodeURIComponent(sym)+"?range=1y&interval=1d";
+      const r=await fetch(url,{headers:{"user-agent":"Mozilla/5.0","accept":"application/json"}});
+      if(!r.ok)throw new Error("http "+r.status);
+      const d=await r.json();const res=d&&d.chart&&d.chart.result&&d.chart.result[0];if(!res)throw new Error("no result");
+      const m=res.meta||{};const price=(m.regularMarketPrice!=null)?m.regularMarketPrice:null;
+      const ts=res.timestamp||[];const cl=(res.indicators&&res.indicators.quote&&res.indicators.quote[0]&&res.indicators.quote[0].close)||[];
+      const rows=[];for(let i=0;i<ts.length;i++){if(cl[i]!=null)rows.push([new Date(ts[i]*1000).toISOString().slice(0,10),cl[i]]);}
+      const lastDate=rows.length?rows[rows.length-1][0]:null;
+      const mktDate=m.regularMarketTime?new Date(m.regularMarketTime*1000).toISOString().slice(0,10):lastDate;
+      let prevClose=null;
+      if(rows.length){prevClose=(lastDate===mktDate&&rows.length>=2)?rows[rows.length-2][1]:rows[rows.length-1][1];}
+      const findBefore=(d0)=>{for(let i=rows.length-1;i>=0;i--){if(rows[i][0]<d0)return rows[i][1];}return null;};
+      return {symbol:sym,name,price,changePercent:pc(price,prevClose),mtd:pc(price,findBefore(monthStart)),ytd:pc(price,findBefore(yearStart)),state:m.marketState||""};
+    }catch(e){return {symbol:sym,name,price:null,changePercent:null,mtd:null,ytd:null,state:""};}
+  }
+  const markets=await Promise.all(SYMS.map(s=>one(s[0],s[1])));
+  try{await env.KV.put(CACHE,JSON.stringify({t:Date.now(),markets}),{expirationTtl:3600});}catch(e){}
+  return json({markets,asOf:Date.now(),cached:false});
+}
 async function apiData(req,env,email,kind){const key="data:"+email+":"+kind;if(req.method==="GET"){const raw=await env.KV.get(key);return json({items:raw?JSON.parse(raw):null});}if(req.method==="PUT"){const body=await req.json();await env.KV.put(key,JSON.stringify(body.items||[]));return json({ok:true});}return json({error:"method not allowed"},405);}
 export default {async fetch(request,env){const p=new URL(request.url).pathname;try{
 if(p==="/auth/login")return authLogin(request,env);
