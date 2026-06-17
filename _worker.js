@@ -105,6 +105,27 @@ async function apiTracker(env,request){
   }catch(e){}
   return json({config:cfg,ticker,price,changePercent,state,asOf:Date.now()});
 }
+async function ntfyPush(env,payload){
+  let topic="";try{topic=(await env.KV.get("ntfy:topic"))||"";}catch(e){}
+  if(!topic)return {ok:false,error:"no_topic"};
+  const headers={};
+  if(payload&&payload.title)headers["Title"]=payload.title;
+  if(payload&&payload.tags)headers["Tags"]=payload.tags;
+  if(payload&&payload.priority)headers["Priority"]=String(payload.priority);
+  if(payload&&payload.click)headers["Click"]=payload.click;
+  try{const r=await fetch("https://ntfy.sh/"+encodeURIComponent(topic),{method:"POST",headers,body:(payload&&payload.message)||""});return {ok:r.ok,status:r.status};}catch(e){return {ok:false,error:String(e)};}
+}
+async function apiCheckReminders(env,email){
+  const now=Date.now();let last=now-30*60*1000;
+  try{const l=await env.KV.get("ntfy:lastcheck");if(l)last=parseInt(l,10);}catch(e){}
+  const due=[];
+  const consider=(items,label)=>{(items||[]).forEach(t=>{if(t&&t.when&&!t.done){const w=new Date(t.when).getTime();if(!isNaN(w)&&w>last&&w<=now)due.push({text:t.text,assignee:t.assignee||"",label:label});}});};
+  try{const td=await env.KV.get("data:"+email+":todos");if(td)consider(JSON.parse(td),"To-Do");}catch(e){}
+  try{const pr=await env.KV.get("data:"+email+":projects");if(pr){JSON.parse(pr).forEach(p=>consider(p.tasks,p.name));}}catch(e){}
+  for(const d of due){await ntfyPush(env,{title:"⏰ "+(d.label||"Reminder"),message:d.text+(d.assignee?(" — "+d.assignee):""),tags:"alarm_clock"});}
+  await env.KV.put("ntfy:lastcheck",String(now));
+  return {checked:true,pushed:due.length};
+}
 export default {async fetch(request,env){const p=new URL(request.url).pathname;try{
 if(p==="/auth/login")return authLogin(request,env);
 if(p==="/auth/callback")return authCallback(request,env);
@@ -120,6 +141,9 @@ if(p==="/api/config"){if(request.method==="PUT"){const b3=await request.json();a
 if(p==="/api/drafts"){if(request.method==="PUT"){const b4=await request.json();await env.KV.put("drafts:latest",JSON.stringify(b4));return json({ok:true});}const raw=await env.KV.get("drafts:latest");return json(raw?JSON.parse(raw):{updated:null,items:[]});}
 if(p==="/api/tracker")return apiTracker(env,request);
 if(p==="/api/rental"&&request.method==="PUT"){const br=await request.json();await env.KV.put("config:rental",JSON.stringify(br));return json({ok:true});}
+if(p==="/api/ntfy"){if(request.method==="PUT"){const bn=await request.json();await env.KV.put("ntfy:topic",String((bn&&bn.topic)||""));return json({ok:true});}const t=await env.KV.get("ntfy:topic");return json({topic:t||""});}
+if(p==="/api/notify"){if(request.method!=="POST")return json({error:"post_only"},405);const bn=await request.json();return json(await ntfyPush(env,bn));}
+if(p==="/api/check-reminders")return json(await apiCheckReminders(env,session.email));
 const token=await freshToken(env,session);if(!token)return json({error:"token_expired"},401);
 if(p==="/api/calendar")return apiCalendar(env,token);
 if(p==="/api/gmail")return apiGmail(env,token);
