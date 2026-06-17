@@ -318,24 +318,32 @@ function projStatusChip(s) {
   const cls = { active: "st-active", waiting: "st-waiting", hold: "st-hold" }[s];
   return '<span class="tstatus ' + cls + '" data-act="ptstatus" title="Click to change status">' + s + "</span>";
 }
-function addProjTask(projId, input) {
-  const tx = input.value.trim(); if (!tx) return;
+function addProjTask(projId, projEl) {
+  const tin = projEl.querySelector(".ptadd-in"); if (!tin) return;
+  const tx = tin.value.trim(); if (!tx) return;
+  const win = projEl.querySelector(".ptadd-who");
+  const din = projEl.querySelector(".ptadd-when");
   const p = PROJS.find((x) => x.id === projId); if (!p) return;
   if (!p.tasks) p.tasks = [];
-  p.tasks.push({ id: "pt" + Date.now() + "" + Math.floor(Math.random() * 99), text: tx, status: "active", done: false });
-  input.value = ""; persistProjs(); renderProjs();
+  p.tasks.push({ id: "pt" + Date.now() + "" + Math.floor(Math.random() * 99), text: tx, status: "active", done: false, assignee: (win ? win.value.trim() : ""), when: (din && din.value) ? din.value : null, notified: false });
+  tin.value = ""; if (win) win.value = ""; if (din) din.value = ""; persistProjs(); renderProjs();
 }
 function renderProjs() {
   const el = $("#projs");
   $("#proj-avg").textContent = PROJS.length ? Math.round(PROJS.reduce((s, p) => s + (+p.pct || 0), 0) / PROJS.length) + "% avg" : "";
   el.innerHTML = PROJS.length ? PROJS.map((p) => {
     const tasks = p.tasks || [];
-    const openT = tasks.filter((t) => !t.done).length;
-    const tasksHtml = tasks.length ? tasks.map((t) =>
-      '<div class="ptask ' + (t.done ? "done" : "") + '" data-tid="' + t.id + '"><input type="checkbox" ' + (t.done ? "checked" : "") +
-      ' data-act="ptchk">' + projStatusChip(t.status) + '<span class="ptt">' + esc(t.text) +
-      '</span><button class="del" data-act="ptdel" title="Delete task">&times;</button></div>'
-    ).join("") : '<div class="ptask-empty">No tasks yet.</div>';
+    const tasksHtml = tasks.length ? tasks.map((t) => {
+      const who = t.assignee
+        ? '<span class="pt-who" data-act="ptwho" title="Reassign">&#128100; ' + esc(t.assignee) + '</span>'
+        : '<span class="pt-who empty" data-act="ptwho" title="Assign to a team member">+ assign</span>';
+      let rem;
+      if (t.when) { const r = fmtRem(t.when); rem = '<span class="pt-rem ' + (r.past && !t.done ? "past" : "") + '" data-act="ptwhen" title="Edit reminder">&#9200; ' + esc(r.lbl) + '</span>'; }
+      else rem = '<span class="pt-rem empty" data-act="ptwhen" title="Add a reminder">&#9200; remind</span>';
+      return '<div class="ptask ' + (t.done ? "done" : "") + '" data-tid="' + t.id + '"><input type="checkbox" ' + (t.done ? "checked" : "") +
+        ' data-act="ptchk">' + projStatusChip(t.status) + '<span class="ptt">' + esc(t.text) + '</span>' +
+        who + rem + '<button class="del" data-act="ptdel" title="Delete task">&times;</button></div>';
+    }).join("") : '<div class="ptask-empty">No tasks yet.</div>';
     return '<div class="proj" data-id="' + p.id + '"><div class="ph"><div class="pn">' + esc(p.name) +
       '</div><div style="display:flex;align-items:center;gap:8px"><span class="pv">' + (+p.pct) + '%</span>' +
       '<button class="del" data-act="pdel" title="Remove project">&times;</button></div></div>' +
@@ -343,6 +351,8 @@ function renderProjs() {
       '<div class="prng"><input type="range" min="0" max="100" step="5" value="' + (+p.pct) + '" data-act="prng"></div>' +
       '<div class="ptasks">' + tasksHtml + '</div>' +
       '<div class="ptadd"><input type="text" class="ptadd-in" placeholder="Add task under ' + esc(p.name) + '…" maxlength="120">' +
+      '<input type="text" class="ptadd-who" placeholder="Assignee" maxlength="40">' +
+      '<input type="datetime-local" class="ptadd-when" title="Reminder (optional)">' +
       '<button class="btn ghost ptadd-btn" data-act="ptadd">Add</button></div></div>';
   }).join("") : '<div class="empty">No projects. Add one above.</div>';
   drawChart();
@@ -367,6 +377,14 @@ function checkReminders() {
     }
   });
   if (changed) { persistTodos(); renderTodos(); }
+  let pchanged = false;
+  PROJS.forEach((p) => { (p.tasks || []).forEach((t) => {
+    if (t.when && !t.done && !t.notified && new Date(t.when).getTime() <= now) {
+      t.notified = true; pchanged = true;
+      if ("Notification" in window && Notification.permission === "granted") { try { new Notification("⏰ " + p.name, { body: t.text + (t.assignee ? " — " + t.assignee : "") }); } catch (e) {} }
+    }
+  }); });
+  if (pchanged) { persistProjs(); renderProjs(); }
 }
 
 /* ---------- events ---------- */
@@ -414,7 +432,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
   $("#projs").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && e.target.classList.contains("ptadd-in")) { const projEl = e.target.closest(".proj"); if (projEl) addProjTask(projEl.dataset.id, e.target); }
+    if (e.key === "Enter" && (e.target.classList.contains("ptadd-in") || e.target.classList.contains("ptadd-who"))) { const projEl = e.target.closest(".proj"); if (projEl) addProjTask(projEl.dataset.id, projEl); }
   });
   $("#projs").addEventListener("click", (e) => {
     const b = e.target.closest("[data-act]"); const projEl = e.target.closest(".proj"); if (!projEl) return;
@@ -422,13 +440,15 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!b) return;
     const act = b.dataset.act;
     if (act === "pdel") { PROJS = PROJS.filter((x) => x.id !== pid); persistProjs(); renderProjs(); return; }
-    if (act === "ptadd") { const inp = projEl.querySelector(".ptadd-in"); if (inp) addProjTask(pid, inp); return; }
+    if (act === "ptadd") { addProjTask(pid, projEl); return; }
     const taskEl = e.target.closest(".ptask");
     if (taskEl && p) {
       const tid = taskEl.dataset.tid; const t = (p.tasks || []).find((x) => x.id === tid);
       if (act === "ptchk") { if (t) t.done = !t.done; }
       else if (act === "ptstatus") { if (t) { const i = STATUSES.indexOf(t.status || "active"); t.status = STATUSES[(i + 1) % STATUSES.length]; } }
       else if (act === "ptdel") { p.tasks = (p.tasks || []).filter((x) => x.id !== tid); }
+      else if (act === "ptwho") { if (t) { const v = prompt("Assign to (team member):", t.assignee || ""); if (v === null) return; t.assignee = v.trim(); } }
+      else if (act === "ptwhen") { if (t) { const v = prompt("Reminder date/time (YYYY-MM-DDTHH:MM), leave blank to clear:", t.when || ""); if (v === null) return; t.when = (v.trim() || null); if (t.when) t.notified = false; } }
       else return;
       persistProjs(); renderProjs();
     }
