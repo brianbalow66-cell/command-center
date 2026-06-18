@@ -109,6 +109,7 @@ async function ntfyPush(env,payload){
   let topic="";try{topic=(await env.KV.get("ntfy:topic"))||"";}catch(e){}
   if(!topic)return {ok:false,error:"no_topic"};
   const headers={};
+  if(env.NTFY_TOKEN)headers["Authorization"]="Bearer "+env.NTFY_TOKEN;
   if(payload&&payload.title)headers["Title"]=payload.title;
   if(payload&&payload.tags)headers["Tags"]=payload.tags;
   if(payload&&payload.priority)headers["Priority"]=String(payload.priority);
