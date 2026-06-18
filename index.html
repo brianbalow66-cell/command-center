@@ -67,6 +67,16 @@
       <h2>To-Do &amp; Reminders <span class="badge" id="todo-count"></span></h2>
       <div class="addrow">
         <input type="text" id="t-text" placeholder="Add a task&hellip;" maxlength="140">
+        <input type="date" id="t-due" title="Due date (optional)">
+        <select id="t-remsel" class="remsel" title="Quick reminder">
+          <option value="">Remind&hellip;</option>
+          <option value="0">Today</option>
+          <option value="1d">Tomorrow</option>
+          <option value="1w">1 week</option>
+          <option value="1m">1 month</option>
+          <option value="6m">6 months</option>
+          <option value="1y">1 year</option>
+        </select>
         <input type="datetime-local" id="t-when" title="Reminder time (optional)">
         <button class="btn" id="t-add">Add</button>
       </div>

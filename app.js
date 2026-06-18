@@ -284,19 +284,41 @@ function renderTodos() {
   el.innerHTML = visible.map((t) => {
     let rem = "";
     if (t.when) { const r = fmtRem(t.when); rem = '<div class="rem ' + (r.past && !t.done ? "past" : "") + '">&#9200; ' + esc(r.lbl) + "</div>"; }
+    let due;
+    if (t.due) { const dd = fmtDue(t.due); due = '<div class="rem due ' + (dd && dd.past && !t.done ? "past" : "") + '" data-act="due" title="Edit due date">&#128197; ' + esc(dd ? dd.lbl : t.due) + "</div>"; }
+    else due = '<div class="rem due empty" data-act="due" title="Set a due date">&#128197; set due</div>';
     const chip = t.archived ? "" : statusChip(t.status);
     const archBtn = t.archived
       ? '<button class="arch" data-act="unarch" title="Restore to active">&#8617;</button>'
       : '<button class="arch" data-act="arch" title="Archive">&#128229;</button>';
     return '<div class="todo ' + (t.done ? "done " : "") + (t.archived ? "archived" : "") + '" data-id="' + t.id + '"><input type="checkbox" ' +
-      (t.done ? "checked" : "") + ' data-act="chk"><div class="tx"><div class="tt">' + chip + esc(t.text) + "</div>" + rem +
+      (t.done ? "checked" : "") + ' data-act="chk"><div class="tx"><div class="tt">' + chip + esc(t.text) + "</div>" + rem + due +
       "</div>" + archBtn + '<button class="del" data-act="del" title="Delete">&times;</button></div>';
   }).join("");
 }
+// quick-reminder preset code -> datetime-local string (now + offset, 9am)
+function presetWhen(code) {
+  if (!code) return "";
+  const d = new Date(); d.setHours(9, 0, 0, 0);
+  if (code === "1d") d.setDate(d.getDate() + 1);
+  else if (code === "1w") d.setDate(d.getDate() + 7);
+  else if (code === "1m") d.setMonth(d.getMonth() + 1);
+  else if (code === "6m") d.setMonth(d.getMonth() + 6);
+  else if (code === "1y") d.setFullYear(d.getFullYear() + 1);
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+// due date (YYYY-MM-DD) -> {lbl, past}
+function fmtDue(s) {
+  if (!s) return null;
+  const dt = new Date(s + "T00:00:00"); if (isNaN(dt)) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return { lbl: "Due " + dt.toLocaleDateString(undefined, { month: "short", day: "numeric" }), past: dt < today };
+}
 function addTodo() {
   const tx = $("#t-text").value.trim(); if (!tx) return;
-  TODOS.push({ id: Date.now() + "" + Math.floor(Math.random() * 99), text: tx, when: $("#t-when").value || null, status: "active", done: false, archived: false, notified: false });
-  $("#t-text").value = ""; $("#t-when").value = ""; persistTodos(); renderTodos();
+  TODOS.push({ id: Date.now() + "" + Math.floor(Math.random() * 99), text: tx, when: $("#t-when").value || null, due: ($("#t-due") ? $("#t-due").value : "") || null, status: "active", done: false, archived: false, notified: false });
+  $("#t-text").value = ""; $("#t-when").value = ""; if ($("#t-due")) $("#t-due").value = ""; persistTodos(); renderTodos();
 }
 
 /* ---------- projects ---------- */
@@ -325,10 +347,11 @@ function addProjTask(projId, projEl) {
   const tx = tin.value.trim(); if (!tx) return;
   const win = projEl.querySelector(".ptadd-who");
   const din = projEl.querySelector(".ptadd-when");
+  const dueIn = projEl.querySelector(".ptadd-due");
   const p = PROJS.find((x) => x.id === projId); if (!p) return;
   if (!p.tasks) p.tasks = [];
-  p.tasks.push({ id: "pt" + Date.now() + "" + Math.floor(Math.random() * 99), text: tx, status: "active", done: false, assignee: (win ? win.value.trim() : ""), when: (din && din.value) ? din.value : null, notified: false });
-  tin.value = ""; if (win) win.value = ""; if (din) din.value = ""; persistProjs(); renderProjs();
+  p.tasks.push({ id: "pt" + Date.now() + "" + Math.floor(Math.random() * 99), text: tx, status: "active", done: false, assignee: (win ? win.value.trim() : ""), when: (din && din.value) ? din.value : null, due: (dueIn && dueIn.value) ? dueIn.value : null, notified: false });
+  tin.value = ""; if (win) win.value = ""; if (din) din.value = ""; if (dueIn) dueIn.value = ""; persistProjs(); renderProjs();
 }
 function renderProjs() {
   const el = $("#projs");
@@ -342,9 +365,12 @@ function renderProjs() {
       let rem;
       if (t.when) { const r = fmtRem(t.when); rem = '<span class="pt-rem ' + (r.past && !t.done ? "past" : "") + '" data-act="ptwhen" title="Edit reminder">&#9200; ' + esc(r.lbl) + '</span>'; }
       else rem = '<span class="pt-rem empty" data-act="ptwhen" title="Add a reminder">&#9200; remind</span>';
+      let pdue;
+      if (t.due) { const dd = fmtDue(t.due); pdue = '<span class="pt-rem pt-due ' + (dd && dd.past && !t.done ? "past" : "") + '" data-act="ptdue" title="Edit due date">&#128197; ' + esc(dd ? dd.lbl : t.due) + '</span>'; }
+      else pdue = '<span class="pt-rem pt-due empty" data-act="ptdue" title="Set a due date">&#128197; due</span>';
       return '<div class="ptask ' + (t.done ? "done" : "") + '" data-tid="' + t.id + '"><input type="checkbox" ' + (t.done ? "checked" : "") +
         ' data-act="ptchk">' + projStatusChip(t.status) + '<span class="ptt">' + esc(t.text) + '</span>' +
-        who + rem + '<button class="del" data-act="ptdel" title="Delete task">&times;</button></div>';
+        who + rem + pdue + '<button class="del" data-act="ptdel" title="Delete task">&times;</button></div>';
     }).join("") : '<div class="ptask-empty">No tasks yet.</div>';
     return '<div class="proj" data-id="' + p.id + '"><div class="ph"><div class="pn">' + esc(p.name) +
       '</div><div style="display:flex;align-items:center;gap:8px"><span class="pv">' + (+p.pct) + '%</span>' +
@@ -354,6 +380,8 @@ function renderProjs() {
       '<div class="ptasks">' + tasksHtml + '</div>' +
       '<div class="ptadd"><input type="text" class="ptadd-in" placeholder="Add task under ' + esc(p.name) + '…" maxlength="120">' +
       '<input type="text" class="ptadd-who" placeholder="Assignee" maxlength="40">' +
+      '<input type="date" class="ptadd-due" title="Due date (optional)">' +
+      '<select class="ptadd-remsel remsel" title="Quick reminder"><option value="">Remind…</option><option value="0">Today</option><option value="1d">Tomorrow</option><option value="1w">1 week</option><option value="1m">1 month</option><option value="6m">6 months</option><option value="1y">1 year</option></select>' +
       '<input type="datetime-local" class="ptadd-when" title="Reminder (optional)">' +
       '<button class="btn ghost ptadd-btn" data-act="ptadd">Add</button></div></div>';
   }).join("") : '<div class="empty">No projects. Add one above.</div>';
@@ -393,6 +421,8 @@ function checkReminders() {
 document.addEventListener("DOMContentLoaded", () => {
   $("#t-add").onclick = addTodo;
   $("#t-text").addEventListener("keydown", (e) => { if (e.key === "Enter") addTodo(); });
+  const tRemSel = $("#t-remsel");
+  if (tRemSel) tRemSel.addEventListener("change", () => { const w = presetWhen(tRemSel.value); if (w) $("#t-when").value = w; tRemSel.value = ""; });
   $("#todos").addEventListener("click", (e) => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     const id = b.closest(".todo").dataset.id;
@@ -403,6 +433,7 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (act === "status") { if (t) { const i = STATUSES.indexOf(t.status || "active"); t.status = STATUSES[(i + 1) % STATUSES.length]; } }
     else if (act === "arch") { if (t) { t.archived = true; } }
     else if (act === "unarch") { if (t) { t.archived = false; } }
+    else if (act === "due") { if (t) { const v = prompt("Due date (YYYY-MM-DD), leave blank to clear:", t.due || ""); if (v === null) return; t.due = (v.trim() || null); } }
     persistTodos(); renderTodos();
   });
   const archToggle = $("#arch-toggle");
@@ -433,6 +464,12 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
   });
+  $("#projs").addEventListener("change", (e) => {
+    if (e.target.classList.contains("ptadd-remsel")) {
+      const w = presetWhen(e.target.value); const row = e.target.closest(".ptadd");
+      const win = row && row.querySelector(".ptadd-when"); if (w && win) win.value = w; e.target.value = "";
+    }
+  });
   $("#projs").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.target.classList.contains("ptadd-in") || e.target.classList.contains("ptadd-who"))) { const projEl = e.target.closest(".proj"); if (projEl) addProjTask(projEl.dataset.id, projEl); }
   });
@@ -451,6 +488,7 @@ document.addEventListener("DOMContentLoaded", () => {
       else if (act === "ptdel") { p.tasks = (p.tasks || []).filter((x) => x.id !== tid); }
       else if (act === "ptwho") { if (t) { const v = prompt("Assign to (team member):", t.assignee || ""); if (v === null) return; t.assignee = v.trim(); } }
       else if (act === "ptwhen") { if (t) { const v = prompt("Reminder date/time (YYYY-MM-DDTHH:MM), leave blank to clear:", t.when || ""); if (v === null) return; t.when = (v.trim() || null); if (t.when) t.notified = false; } }
+      else if (act === "ptdue") { if (t) { const v = prompt("Due date (YYYY-MM-DD), leave blank to clear:", t.due || ""); if (v === null) return; t.due = (v.trim() || null); } }
       else return;
       persistProjs(); renderProjs();
     }
