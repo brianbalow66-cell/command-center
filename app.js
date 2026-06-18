@@ -27,7 +27,8 @@ async function boot() {
 
   loadMarket(); loadCalendar(); loadMail(); loadResearch(); loadTracker(); loadRental();
   // auto-refresh live data (markets refresh hourly server-side; poll every 15 min to pick up updates)
-  setInterval(loadMarket, 15 * 60000);
+  // markets only auto-refresh between 8am and 10pm local time
+  setInterval(function(){ var h = new Date().getHours(); if (h >= 8 && h < 22) loadMarket(); }, 15 * 60000);
   setInterval(loadCalendar, 5 * 60000);
   setInterval(loadMail, 3 * 60000);
   setInterval(loadResearch, 10 * 60000);
