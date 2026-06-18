@@ -108,13 +108,14 @@ async function loadMail() {
     await loadDrafts();
     const d = await api("/api/gmail").then((r) => r.json());
     const items = d.messages || [];
+    const realDrafts = new Set(d.draftThreads || []);
     let unread = 0, dcount = 0;
     el.innerHTML = items.map((m) => {
       const labels = m.labelIds || [];
       const isUnread = labels.includes("UNREAD"); if (isUnread) unread++;
       const isImp = labels.includes("IMPORTANT");
       const snip = (m.snippet || "").replace(/[͏​‌‍­‎﻿\s]+/g, " ").trim();
-      const draft = m.threadId && DRAFTS[m.threadId];
+      const draft = m.threadId && realDrafts.has(m.threadId) && DRAFTS[m.threadId];
       let badge = "";
       if (draft) { dcount++; const url = "https://mail.google.com/mail/u/0/#all/" + encodeURIComponent(m.threadId); badge = '<a class="draftbadge" href="' + url + '" target="_blank" rel="noopener" title="Reply draft ready in your Gmail — click to review">✎ draft ready</a>'; }
       return '<div class="ml"><span class="dot ' + (isUnread ? "unread" : "") + '"></span>' +
