@@ -1,323 +1,153 @@
-/**
- * cc-notifier - Cloudflare Worker (CRON), 24/7, independent of any device.
- *
- *  Runs three things on a schedule:
- *   1. Phone reminders via ntfy (to-do / project task due times).
- *   2. Daily Briefing - generated each morning via the Anthropic API (Claude + web search),
- *      written to the same KV the dashboard reads, archiving the prior day, then a phone push.
- *   3. Email reply drafts - each morning it reads the inbox, asks Claude which emails warrant
- *      a reply, writes Gmail drafts (it CANNOT send), flags them on the dashboard, then a push.
- *
- *  Because this runs on Cloudflare's network, all of it works even when your computer
- *  and the Claude desktop app are closed.
- *
- * Setup (Cloudflare dashboard -> Workers & Pages -> cc-notifier):
- *   1. Settings -> Bindings -> KV namespace: Variable name "KV" -> "command-center".
- *   2. Settings -> Variables and Secrets (all type Secret):
- *        NTFY_TOKEN          = your ntfy access token            (already set)
- *        ANTHROPIC_API_KEY   = key from console.anthropic.com    (already set)
- *        GOOGLE_CLIENT_ID    = same value as the dashboard app   (NEW)
- *        GOOGLE_CLIENT_SECRET= same value as the dashboard app   (NEW)
- *   3. Settings -> Triggers -> Cron Triggers -> run every 5 minutes (cron: 0/5 * * * *).
- *   4. Deploy.
- *
- * Test after deploy:
- *   reminders : https://cc-notifier.<sub>.workers.dev/?run=1
- *   briefing  : https://cc-notifier.<sub>.workers.dev/?brief=1
- *   drafts    : https://cc-notifier.<sub>.workers.dev/?drafts=1
- */
-
-const OWNER_EMAIL = "brianbalow66@gmail.com";
-const DASH_URL = "https://command-center-app-15l.pages.dev/";
-const MODEL = "claude-sonnet-4-6";
-
-const BRIEFING_SYS = [
-  'You are the research engine for a personal dashboard "Daily Briefing". Using web search, compile the genuinely latest developments, then output ONLY a single JSON object - no prose, no markdown, no code fences, nothing before or after the JSON.',
-  "",
-  "Schema (use EXACTLY these 7 section titles, in this order):",
-  '{"updated":"<ISO8601>","sections":[',
-  ' {"title":"Markets","items":[{"t":"one concise sentence","u":"source URL or empty string"}]},',
-  ' {"title":"Crypto","items":[]},',
-  ' {"title":"Business & World","items":[]},',
-  ' {"title":"AI & Tech","items":[]},',
-  ' {"title":"EMS Industry","items":[]},',
-  ' {"title":"EMS Software","items":[]},',
-  ' {"title":"College Football","items":[]}',
-  "]}",
-  "",
-  "Rules:",
-  "- 2 to 4 information-dense, one-sentence items per section. Each item is an object with keys t (text) and u (source URL).",
-  "- Always include a REAL source URL in u from your web search results. Never invent a URL; if you truly have none, use an empty string.",
-  "- Time window: last ~24 hours for Markets, Crypto, Business & World, and AI & Tech. Last ~5 days for EMS Industry, EMS Software, and College Football (these move slowly).",
-  "- For EMS Industry / EMS Software, search vendors like ImageTrend, ESO, MP Cloud, Traumasoft, NEMSIS, and general prehospital/EMS news.",
-  "- DEDUPE: the user message contains yesterday's briefing JSON. Do NOT repeat any item that already appeared there. Only include things genuinely new since then.",
-  '- HONESTY ON SLOW NEWS: if a section has nothing genuinely new versus yesterday, make its FIRST item text exactly "No major new developments in the past 24h." and optionally add ONE more item beginning "Most recent (Mon DD): ..." citing the latest known item with its date. Do not pad with recycled bullets.',
-  "- Prefix older/dated items in the text with the date (e.g. (Jun 14) ...) so the reader can judge freshness.",
-  "Output the JSON object and nothing else.",
-].join("\n");
-
-async function ntfyPush(env, topic, payload) {
-  const headers = {};
-  if (env.NTFY_TOKEN) headers["Authorization"] = "Bearer " + env.NTFY_TOKEN;
-  if (payload.title) headers["Title"] = payload.title;
-  if (payload.tags) headers["Tags"] = payload.tags;
-  if (payload.priority) headers["Priority"] = String(payload.priority);
-  if (payload.click) headers["Click"] = payload.click;
-  try {
-    await fetch("https://ntfy.sh/" + encodeURIComponent(topic), { method: "POST", headers, body: payload.message || "" });
-  } catch (e) {}
-}
-
-// ---------- Reminders ----------
-async function checkAndPush(env) {
-  let topic = "";
-  try { topic = (await env.KV.get("ntfy:topic")) || ""; } catch (e) {}
-  if (!topic) return { ok: false, error: "no_topic" };
-  const now = Date.now();
-  let last = now - 30 * 60 * 1000;
-  try { const l = await env.KV.get("ntfy:lastcheck"); if (l) last = parseInt(l, 10); } catch (e) {}
-  const due = [];
-  const consider = (items, label) => {
-    (items || []).forEach((t) => {
-      if (t && t.when && !t.done) {
-        const w = new Date(t.when).getTime();
-        if (!isNaN(w) && w > last && w <= now) due.push({ text: t.text, assignee: t.assignee || "", label });
-      }
-    });
-  };
-  try { const td = await env.KV.get("data:" + OWNER_EMAIL + ":todos"); if (td) consider(JSON.parse(td), "To-Do"); } catch (e) {}
-  try { const pr = await env.KV.get("data:" + OWNER_EMAIL + ":projects"); if (pr) JSON.parse(pr).forEach((p) => consider(p.tasks, p.name)); } catch (e) {}
-  for (const d of due) {
-    await ntfyPush(env, topic, { title: "Reminder: " + (d.label || ""), message: d.text + (d.assignee ? " - " + d.assignee : ""), tags: "alarm_clock", click: DASH_URL });
+/* Command Center — Cloudflare Pages advanced-mode Worker (_worker.js). KV-backed session. */
+const SCOPES=["openid","email","https://www.googleapis.com/auth/calendar.readonly","https://www.googleapis.com/auth/gmail.modify"].join(" ");
+const json=(o,s=200,ex={})=>new Response(JSON.stringify(o),{status:s,headers:{"content-type":"application/json; charset=utf-8",...ex}});
+const redirect=(location,headers={})=>new Response(null,{status:302,headers:{location,...headers}});
+function parseCookies(req){const h=req.headers.get("cookie")||"";return Object.fromEntries(h.split(/;\s*/).filter(Boolean).map(c=>{const i=c.indexOf("=");return [c.slice(0,i),decodeURIComponent(c.slice(i+1))];}));}
+const allowed=env=>(env.ALLOWED_EMAILS||"").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean);
+const rid=()=>crypto.randomUUID().replace(/-/g,"");
+const base=req=>new URL(req.url).origin;
+const cookie=(v,age)=>`sid=${v}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${age}`;
+async function getSession(req,env){const sid=parseCookies(req).sid;if(!sid)return null;const raw=await env.KV.get("sess:"+sid);if(!raw)return null;const s=JSON.parse(raw);s.__sid=sid;return s;}
+async function saveSession(env,sid,s){const c={...s};delete c.__sid;await env.KV.put("sess:"+sid,JSON.stringify(c),{expirationTtl:60*60*24*30});}
+async function freshToken(env,session){if(session.access_token&&Date.now()<(session.expiry||0)-60000)return session.access_token;if(!session.refresh_token)return null;const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,grant_type:"refresh_token",refresh_token:session.refresh_token})});if(!r.ok)return null;const t=await r.json();session.access_token=t.access_token;session.expiry=Date.now()+(t.expires_in||3600)*1000;await saveSession(env,session.__sid,session);return session.access_token;}
+const gfetch=(url,token)=>fetch(url,{headers:{authorization:"Bearer "+token}});
+async function authLogin(req,env){const state=rid();await env.KV.put("state:"+state,"1",{expirationTtl:600});const u=new URL("https://accounts.google.com/o/oauth2/v2/auth");u.searchParams.set("client_id",env.GOOGLE_CLIENT_ID);u.searchParams.set("redirect_uri",base(req)+"/auth/callback");u.searchParams.set("response_type","code");u.searchParams.set("scope",SCOPES);u.searchParams.set("access_type","offline");u.searchParams.set("include_granted_scopes","true");u.searchParams.set("prompt","consent");u.searchParams.set("state",state);return redirect(u.toString());}
+async function authCallback(req,env){const url=new URL(req.url);const code=url.searchParams.get("code"),state=url.searchParams.get("state");if(!code||!state||!(await env.KV.get("state:"+state)))return new Response("Invalid auth state",{status:400});await env.KV.delete("state:"+state);const tr=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({code,client_id:env.GOOGLE_CLIENT_ID,client_secret:env.GOOGLE_CLIENT_SECRET,redirect_uri:base(req)+"/auth/callback",grant_type:"authorization_code"})});if(!tr.ok)return new Response("Token exchange failed",{status:400});const t=await tr.json();if(t.refresh_token){try{await env.KV.put("google:refresh",t.refresh_token);}catch(e){}}const ui=await gfetch("https://www.googleapis.com/oauth2/v2/userinfo",t.access_token).then(r=>r.json());const email=(ui.email||"").toLowerCase();const list=allowed(env);if(list.length&&!list.includes(email))return new Response("Access denied for "+email,{status:403});const sid=rid();await saveSession(env,sid,{email,name:ui.name||email,picture:ui.picture||"",access_token:t.access_token,refresh_token:t.refresh_token||"",expiry:Date.now()+(t.expires_in||3600)*1000});return redirect(base(req)+"/",{"set-cookie":cookie(sid,60*60*24*30)});}
+async function authLogout(req,env){const s=await getSession(req,env);if(s)await env.KV.delete("sess:"+s.__sid);return redirect(base(req)+"/",{"set-cookie":cookie("",0)});}
+async function getConfig(env){try{const raw=await env.KV.get("config:dashboard");return raw?JSON.parse(raw):{};}catch(e){return {};}}
+async function apiCalendar(env,token){const cfg=await getConfig(env);const now=new Date(),end=new Date(Date.now()+(cfg.calDays||14)*864e5);const u=new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");u.searchParams.set("timeMin",now.toISOString());u.searchParams.set("timeMax",end.toISOString());u.searchParams.set("singleEvents","true");u.searchParams.set("orderBy","startTime");u.searchParams.set("maxResults","25");const d=await gfetch(u.toString(),token).then(r=>r.json());return json({events:(d.items||[]).map(e=>({summary:e.summary||"(no title)",location:e.location||"",eventType:e.eventType||"default",start:e.start||{},end:e.end||{},status:e.status}))});}
+async function apiGmail(env,token){const list=await gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in%3Ainbox&maxResults=12",token).then(r=>r.json());const ids=(list.messages||[]).map(m=>m.id);const msgs=await Promise.all(ids.map(id=>gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/"+id+"?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date",token).then(r=>r.json())));const messages=msgs.map(m=>{const hs=((m.payload&&m.payload.headers)||[]).reduce((a,h)=>{a[h.name.toLowerCase()]=h.value;return a;},{});return {sender:hs.from||"",subject:hs.subject||"(no subject)",date:hs.date?new Date(hs.date).toISOString():null,snippet:m.snippet||"",labelIds:m.labelIds||[],threadId:m.threadId||""};});let draftThreads=[];try{const dl=await gfetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts?maxResults=50",token).then(r=>r.json());draftThreads=(dl.drafts||[]).map(d=>d.message&&d.message.threadId).filter(Boolean);}catch(e){}return json({messages,draftThreads});}
+async function apiMarkets(env,force){
+  const CACHE="markets:cache";
+  if(!force){try{const c=await env.KV.get(CACHE);if(c){const o=JSON.parse(c);if(Date.now()-o.t<55*60*1000)return json({markets:o.markets,asOf:o.t,cached:true});}}catch(e){}}
+  // [yahooSymbol, displayName, stooqSymbol]
+  const SYMS=[["^GSPC","S&P 500","^spx"],["^DJI","Dow Jones","^dji"],["^IXIC","Nasdaq","^ndq"],["^TNX","10Y Treasury","10usy.b"],["^VIX","VIX","^vix"],["CL=F","Crude Oil","cl.f"],["GC=F","Gold","xauusd"],["BTC-USD","Bitcoin","btcusd"],["ETH-USD","Ethereum","ethusd"]];
+  const now=new Date();const yr=now.getUTCFullYear();const mo=String(now.getUTCMonth()+1).padStart(2,"0");const dd=String(now.getUTCDate()).padStart(2,"0");
+  const monthStart=yr+"-"+mo+"-01";const yearStart=yr+"-01-01";
+  const pc=(p,ref)=>(p!=null&&ref!=null&&ref!==0)?((p-ref)/ref*100):null;
+  const findBefore=(rows,d0)=>{for(let i=rows.length-1;i>=0;i--){if(rows[i][0]<d0)return rows[i][1];}return null;};
+  const TO=(ms)=>{const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal;};
+  async function yahoo(sym){
+    const url="https://query1.finance.yahoo.com/v8/finance/chart/"+encodeURIComponent(sym)+"?range=1y&interval=1d";
+    const r=await fetch(url,{headers:{"user-agent":"Mozilla/5.0","accept":"application/json"},signal:TO(8000)});
+    if(!r.ok)throw new Error("y"+r.status);
+    const d=await r.json();const res=d&&d.chart&&d.chart.result&&d.chart.result[0];if(!res)throw new Error("ynores");
+    const m=res.meta||{};const price=(m.regularMarketPrice!=null)?m.regularMarketPrice:null;
+    const ts=res.timestamp||[];const cl=(res.indicators&&res.indicators.quote&&res.indicators.quote[0]&&res.indicators.quote[0].close)||[];
+    const rows=[];for(let i=0;i<ts.length;i++){if(cl[i]!=null)rows.push([new Date(ts[i]*1000).toISOString().slice(0,10),cl[i]]);}
+    if(price==null||!rows.length)throw new Error("yempty");
+    const lastDate=rows[rows.length-1][0];
+    const mktDate=m.regularMarketTime?new Date(m.regularMarketTime*1000).toISOString().slice(0,10):lastDate;
+    const prevClose=(lastDate===mktDate&&rows.length>=2)?rows[rows.length-2][1]:rows[rows.length-1][1];
+    return {price,prevClose,rows,state:m.marketState||""};
   }
-  await env.KV.put("ntfy:lastcheck", String(now));
-  return { ok: true, pushed: due.length };
-}
-
-// ---------- Daily briefing ----------
-async function runBriefing(env) {
-  if (!env.ANTHROPIC_API_KEY) return { error: "no_api_key" };
-  let prevRaw = "";
-  try { prevRaw = (await env.KV.get("research:latest")) || ""; } catch (e) {}
-  const user = "Yesterday's briefing JSON (do NOT repeat any of its items):\n" + (prevRaw || "(none)") + "\n\nResearch now and output today's briefing JSON.";
-  let data;
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 3000,
-        system: BRIEFING_SYS,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 10 }],
-        messages: [{ role: "user", content: user }],
-      }),
-    });
-    data = await resp.json();
-  } catch (e) {
-    return { error: "fetch_failed" };
+  async function stooq(scode){
+    const hurl="https://stooq.com/q/d/l/?s="+encodeURIComponent(scode)+"&i=d&d1="+(yr-1)+"1201&d2="+yr+mo+dd;
+    const hr=await fetch(hurl,{signal:TO(8000)});const ht=await hr.text();
+    const lines=ht.trim().split(/\r?\n/);const rows=[];
+    for(let i=1;i<lines.length;i++){const p=lines[i].split(",");if(p.length>=5){const c=parseFloat(p[4]);if(!isNaN(c))rows.push([p[0],c]);}}
+    if(!rows.length)throw new Error("sempty");
+    let price=rows[rows.length-1][1];let prevClose=rows.length>=2?rows[rows.length-2][1]:null;
+    try{const lr=await fetch("https://stooq.com/q/l/?s="+encodeURIComponent(scode)+"&f=sd2t2c&e=csv",{signal:TO(6000)});const lt=(await lr.text()).trim().split(/\r?\n/);const lp=lt[lt.length-1].split(",");const lc=parseFloat(lp[lp.length-1]);if(!isNaN(lc)&&lc>0){price=lc;prevClose=rows[rows.length-1][1];}}catch(e){}
+    return {price,prevClose,rows,state:""};
   }
-  if (!data || data.error) return { error: "api_error", detail: data && data.error };
-  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-  const i = text.indexOf("{");
-  const j = text.lastIndexOf("}");
-  if (i < 0 || j < 0) return { error: "no_json", sample: text.slice(0, 300) };
-  let briefing;
-  try { briefing = JSON.parse(text.slice(i, j + 1)); } catch (e) { return { error: "parse_failed", sample: text.slice(i, i + 300) }; }
-  if (!briefing || !Array.isArray(briefing.sections) || !briefing.sections.length) return { error: "bad_shape" };
-  briefing.updated = new Date().toISOString();
-  try {
-    if (prevRaw) {
-      const pj = JSON.parse(prevRaw);
-      let arr = [];
-      try { const a = await env.KV.get("research:archive"); if (a) arr = JSON.parse(a); } catch (e) {}
-      if (!arr.length || arr[0].updated !== pj.updated) arr.unshift(pj);
-      arr = arr.slice(0, 30);
-      await env.KV.put("research:archive", JSON.stringify(arr));
+  async function one(yh,name,sc){
+    let data=null;
+    try{data=await yahoo(yh);}catch(e){try{data=await stooq(sc);}catch(e2){data=null;}}
+    if(!data||data.price==null)return {symbol:yh,name,price:null,changePercent:null,mtd:null,ytd:null,state:""};
+    return {symbol:yh,name,price:data.price,changePercent:pc(data.price,data.prevClose),mtd:pc(data.price,findBefore(data.rows,monthStart)),ytd:pc(data.price,findBefore(data.rows,yearStart)),state:data.state};
+  }
+  const markets=await Promise.all(SYMS.map(s=>one(s[0],s[1],s[2])));
+  try{await env.KV.put(CACHE,JSON.stringify({t:Date.now(),markets}),{expirationTtl:3600});}catch(e){}
+  return json({markets,asOf:Date.now(),cached:false});
+}
+async function apiRental(env,token){
+  let manual={};try{const mr=await env.KV.get("config:rental");if(mr)manual=JSON.parse(mr);}catch(e){}
+  const search=(q,n)=>gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults="+n+"&q="+encodeURIComponent(q),token).then(r=>r.json());
+  const getMsg=(id)=>gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/"+id+"?format=metadata&metadataHeaders=Subject&metadataHeaders=Date",token).then(r=>r.json());
+  const hdr=(m,name)=>{const hs=((m.payload&&m.payload.headers)||[]);const h=hs.find(x=>x.name.toLowerCase()===name);return h?h.value:"";};
+  const iso=(m)=>m.internalDate?new Date(parseInt(m.internalDate,10)).toISOString():null;
+  let lastPayment=null,ytd=0,payCount=0;
+  try{
+    const l=await search('from:topkey.io "owner payment"',20);
+    const ids=(l.messages||[]).map(m=>m.id);
+    const msgs=await Promise.all(ids.map(getMsg));
+    const yr=new Date().getUTCFullYear();
+    const pays=msgs.map(m=>{const amt=parseFloat((((m.snippet||"").match(/\$([0-9,]+(?:\.[0-9]{1,2})?)/)||[])[1]||"").replace(/,/g,""));return {amount:isNaN(amt)?null:amt,date:iso(m)};}).filter(p=>p.amount!=null);
+    pays.sort((a,b)=>(a.date<b.date?1:-1));
+    lastPayment=pays[0]||null;
+    const ytdPays=pays.filter(p=>p.date&&new Date(p.date).getUTCFullYear()===yr);
+    ytd=ytdPays.reduce((s,p)=>s+p.amount,0);payCount=ytdPays.length;
+  }catch(e){}
+  let lastStatement=null;
+  try{const l=await search('from:guesty.com "Owner statement"',3);const id=(l.messages||[])[0]&&l.messages[0].id;if(id){const m=await getMsg(id);lastStatement={period:hdr(m,"subject").replace(/^Owner statement\s*/i,""),date:iso(m),threadId:m.threadId};}}catch(e){}
+  let lastUpdate=null;
+  try{const l=await search('from:owners@bluegemsmgmt.com "Homeowner Update"',3);const id=(l.messages||[])[0]&&l.messages[0].id;if(id){const m=await getMsg(id);lastUpdate={subject:hdr(m,"subject"),date:iso(m),threadId:m.threadId};}}catch(e){}
+  return json({property:"855 Golden Bear",lastPayment,ytdPayouts:ytd,paymentCount:payCount,lastStatement,lastUpdate,occupancy:(manual.occupancy!=null?manual.occupancy:null),revenue30d:(manual.revenue30d!=null?manual.revenue30d:null),asOf:manual.asOf||null});
+}
+async function apiData(req,env,email,kind){const key="data:"+email+":"+kind;if(req.method==="GET"){const raw=await env.KV.get(key);return json({items:raw?JSON.parse(raw):null});}if(req.method==="PUT"){const body=await req.json();await env.KV.put(key,JSON.stringify(body.items||[]));return json({ok:true});}return json({error:"method not allowed"},405);}
+async function apiTracker(env,request){
+  const KEY="tracker:spcx";
+  if(request.method==="PUT"){const b=await request.json();await env.KV.put(KEY,JSON.stringify(b));return json({ok:true});}
+  let cfg={};try{const raw=await env.KV.get(KEY);if(raw)cfg=JSON.parse(raw);}catch(e){}
+  const ticker=cfg.ticker||"SPCX";
+  let price=null,changePercent=null,state="";
+  try{
+    const ck="tracker:price:"+ticker;
+    const c=await env.KV.get(ck);
+    if(c){const o=JSON.parse(c);if(Date.now()-o.t<10*60*1000){price=o.price;changePercent=o.cp;state=o.s||"";}}
+    if(price==null){
+      const sig=(()=>{const a=new AbortController();setTimeout(()=>a.abort(),8000);return a.signal;})();
+      const r=await fetch("https://query1.finance.yahoo.com/v8/finance/chart/"+encodeURIComponent(ticker)+"?range=1mo&interval=1d",{headers:{"user-agent":"Mozilla/5.0","accept":"application/json"},signal:sig});
+      if(r.ok){const d=await r.json();const res=d&&d.chart&&d.chart.result&&d.chart.result[0];if(res){const m=res.meta||{};const cl=(res.indicators&&res.indicators.quote&&res.indicators.quote[0]&&res.indicators.quote[0].close)||[];const rows=cl.filter(x=>x!=null);price=(m.regularMarketPrice!=null)?m.regularMarketPrice:(rows.length?rows[rows.length-1]:null);const prev=rows.length>=2?rows[rows.length-2]:(m.chartPreviousClose||null);changePercent=(price!=null&&prev)?((price-prev)/prev*100):null;state=m.marketState||"";}}
+      if(price!=null){await env.KV.put(ck,JSON.stringify({t:Date.now(),price,cp:changePercent,s:state}),{expirationTtl:900});}
     }
-  } catch (e) {}
-  await env.KV.put("research:latest", JSON.stringify(briefing));
-  try {
-    const topic = (await env.KV.get("ntfy:topic")) || "";
-    if (topic) await ntfyPush(env, topic, { title: "Daily briefing ready", message: "Your Command Center briefing refreshed.", tags: "newspaper", click: DASH_URL });
-  } catch (e) {}
-  return { ok: true, sections: briefing.sections.length };
+  }catch(e){}
+  return json({config:cfg,ticker,price,changePercent,state,asOf:Date.now()});
 }
-
-async function maybeDailyBriefing(env) {
-  try {
-    const now = new Date();
-    if (now.getUTCHours() < 11) return { skipped: "before window" };
-    const today = now.toISOString().slice(0, 10);
-    let lr = "";
-    try { lr = (await env.KV.get("briefing:lastrun")) || ""; } catch (e) {}
-    if (lr === today) return { skipped: "already ran today" };
-    await env.KV.put("briefing:lastrun", today);
-    return await runBriefing(env);
-  } catch (e) {
-    return { error: String(e) };
-  }
+async function ntfyPush(env,payload){
+  let topic="";try{topic=(await env.KV.get("ntfy:topic"))||"";}catch(e){}
+  if(!topic)return {ok:false,error:"no_topic"};
+  const headers={};
+  if(env.NTFY_TOKEN)headers["Authorization"]="Bearer "+env.NTFY_TOKEN;
+  if(payload&&payload.title)headers["Title"]=payload.title;
+  if(payload&&payload.tags)headers["Tags"]=payload.tags;
+  if(payload&&payload.priority)headers["Priority"]=String(payload.priority);
+  if(payload&&payload.click)headers["Click"]=payload.click;
+  try{const r=await fetch("https://ntfy.sh/"+encodeURIComponent(topic),{method:"POST",headers,body:(payload&&payload.message)||""});return {ok:r.ok,status:r.status};}catch(e){return {ok:false,error:String(e)};}
 }
-
-// ---------- Email reply drafts ----------
-async function googleToken(env) {
-  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return null;
-  let rt = "";
-  try { rt = (await env.KV.get("google:refresh")) || ""; } catch (e) {}
-  if (!rt) return null;
-  try {
-    const r = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, grant_type: "refresh_token", refresh_token: rt }),
-    });
-    if (!r.ok) return null;
-    const t = await r.json();
-    return t.access_token || null;
-  } catch (e) {
-    return null;
-  }
+async function apiCheckReminders(env,email){
+  const now=Date.now();let last=now-30*60*1000;
+  try{const l=await env.KV.get("ntfy:lastcheck");if(l)last=parseInt(l,10);}catch(e){}
+  const due=[];
+  const consider=(items,label)=>{(items||[]).forEach(t=>{if(t&&t.when&&!t.done){const w=new Date(t.when).getTime();if(!isNaN(w)&&w>last&&w<=now)due.push({text:t.text,assignee:t.assignee||"",label:label});}});};
+  try{const td=await env.KV.get("data:"+email+":todos");if(td)consider(JSON.parse(td),"To-Do");}catch(e){}
+  try{const pr=await env.KV.get("data:"+email+":projects");if(pr){JSON.parse(pr).forEach(p=>consider(p.tasks,p.name));}}catch(e){}
+  for(const d of due){await ntfyPush(env,{title:"⏰ "+(d.label||"Reminder"),message:d.text+(d.assignee?(" — "+d.assignee):""),tags:"alarm_clock"});}
+  await env.KV.put("ntfy:lastcheck",String(now));
+  return {checked:true,pushed:due.length};
 }
-
-function b64url(str) {
-  const bytes = new TextEncoder().encode(str);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function emailAddr(from) {
-  const m = /<([^>]+)>/.exec(from || "");
-  return m ? m[1] : (from || "").trim();
-}
-
-function gfetch(url, token, opts) {
-  const o = opts || {};
-  const h = Object.assign({ authorization: "Bearer " + token }, o.headers || {});
-  return fetch(url, Object.assign({}, o, { headers: h }));
-}
-
-async function runEmailDrafts(env) {
-  if (!env.ANTHROPIC_API_KEY) return { error: "no_api_key" };
-  const token = await googleToken(env);
-  if (!token) return { error: "no_google_token - sign out/in on the dashboard and confirm GOOGLE_CLIENT_ID/SECRET secrets" };
-  let list;
-  try {
-    const q = encodeURIComponent("in:inbox -in:chats newer_than:7d");
-    list = await gfetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?q=" + q + "&maxResults=15", token).then((r) => r.json());
-  } catch (e) {
-    return { error: "list_failed" };
-  }
-  const ids = (list.messages || []).map((m) => m.id);
-  if (!ids.length) return { ok: true, drafts: 0, note: "inbox empty" };
-  const drafted = new Set();
-  try {
-    const dl = await gfetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts?maxResults=100", token).then((r) => r.json());
-    (dl.drafts || []).forEach((d) => { if (d.message && d.message.threadId) drafted.add(d.message.threadId); });
-  } catch (e) {}
-  const metas = await Promise.all(ids.map((id) => {
-    const u = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + id + "?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Message-ID";
-    return gfetch(u, token).then((r) => r.json()).catch(() => null);
-  }));
-  const emails = [];
-  metas.forEach((m) => {
-    if (!m || !m.payload) return;
-    if (drafted.has(m.threadId)) return;
-    const hs = {};
-    (m.payload.headers || []).forEach((h) => { hs[h.name.toLowerCase()] = h.value; });
-    emails.push({ id: m.id, threadId: m.threadId, from: hs.from || "", subject: hs.subject || "(no subject)", messageId: hs["message-id"] || "", snippet: m.snippet || "" });
-  });
-  if (!emails.length) return { ok: true, drafts: 0, note: "nothing new to draft" };
-  const sys = [
-    "You are an executive assistant triaging Brian's inbox. For each email decide if it genuinely warrants a personal reply from Brian.",
-    "Skip newsletters, promotions, receipts, automated/no-reply notifications, and anything that needs no response.",
-    "For those that do warrant a reply, write a concise, professional reply in Brian's first-person voice - courteous and to the point, ending with a line: Best, Brian.",
-    'Output ONLY JSON of the form {"drafts":[{"i":0,"body":"reply text"}]}, including only emails that warrant a reply. If none qualify, output {"drafts":[]}.',
-  ].join(" ");
-  const listText = emails.map((e, idx) => "[" + idx + "] From: " + e.from + "\nSubject: " + e.subject + "\nPreview: " + e.snippet).join("\n\n");
-  let data;
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: MODEL, max_tokens: 2500, system: sys, messages: [{ role: "user", content: "Emails:\n\n" + listText + "\n\nReturn the JSON now." }] }),
-    });
-    data = await resp.json();
-  } catch (e) {
-    return { error: "anthropic_failed" };
-  }
-  if (!data || data.error) return { error: "anthropic_error", detail: data && data.error };
-  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-  const i0 = text.indexOf("{");
-  const j0 = text.lastIndexOf("}");
-  if (i0 < 0 || j0 < 0) return { error: "no_json", sample: text.slice(0, 200) };
-  let parsed;
-  try { parsed = JSON.parse(text.slice(i0, j0 + 1)); } catch (e) { return { error: "parse_failed", sample: text.slice(0, 200) }; }
-  const wanted = (parsed && parsed.drafts) || [];
-  const items = [];
-  let created = 0;
-  for (const w of wanted) {
-    const e = emails[w.i];
-    if (!e || !w.body) continue;
-    let subj = e.subject || "";
-    if (!/^re:/i.test(subj)) subj = "Re: " + subj;
-    const lines = ["To: " + emailAddr(e.from), "Subject: " + subj];
-    if (e.messageId) { lines.push("In-Reply-To: " + e.messageId); lines.push("References: " + e.messageId); }
-    lines.push('Content-Type: text/plain; charset="UTF-8"');
-    lines.push("MIME-Version: 1.0");
-    const raw = b64url(lines.join("\r\n") + "\r\n\r\n" + w.body);
-    try {
-      const cr = await gfetch("https://gmail.googleapis.com/gmail/v1/users/me/drafts", token, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: { threadId: e.threadId, raw: raw } }),
-      });
-      if (cr.ok) { created++; items.push({ threadId: e.threadId, subject: e.subject, summary: w.body.slice(0, 120) }); }
-    } catch (e2) {}
-  }
-  await env.KV.put("drafts:latest", JSON.stringify({ updated: new Date().toISOString(), items: items }));
-  try {
-    const topic = (await env.KV.get("ntfy:topic")) || "";
-    if (topic && created > 0) await ntfyPush(env, topic, { title: created + " reply draft(s) ready", message: "Review in Gmail or on your dashboard.", tags: "email", click: DASH_URL });
-  } catch (e) {}
-  return { ok: true, considered: emails.length, drafts: created };
-}
-
-async function maybeDailyDrafts(env) {
-  try {
-    const now = new Date();
-    const h = now.getUTCHours();
-    const mi = now.getUTCMinutes();
-    if (h < 10 || (h === 10 && mi < 45)) return { skipped: "before window" };
-    const today = now.toISOString().slice(0, 10);
-    let lr = "";
-    try { lr = (await env.KV.get("drafts:lastrun")) || ""; } catch (e) {}
-    if (lr === today) return { skipped: "already ran today" };
-    await env.KV.put("drafts:lastrun", today);
-    return await runEmailDrafts(env);
-  } catch (e) {
-    return { error: String(e) };
-  }
-}
-
-export default {
-  async scheduled(event, env, ctx) {
-    ctx.waitUntil(Promise.all([checkAndPush(env), maybeDailyBriefing(env), maybeDailyDrafts(env)]));
-  },
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    if (url.searchParams.get("run") === "1") {
-      const r = await checkAndPush(env);
-      return new Response(JSON.stringify(r), { headers: { "content-type": "application/json" } });
-    }
-    if (url.searchParams.get("brief") === "1") {
-      const r = await runBriefing(env);
-      return new Response(JSON.stringify(r), { headers: { "content-type": "application/json" } });
-    }
-    if (url.searchParams.get("drafts") === "1") {
-      const r = await runEmailDrafts(env);
-      return new Response(JSON.stringify(r), { headers: { "content-type": "application/json" } });
-    }
-    return new Response("cc-notifier alive");
-  },
-};
+export default {async fetch(request,env){const p=new URL(request.url).pathname;try{
+if(p==="/auth/login")return authLogin(request,env);
+if(p==="/auth/callback")return authCallback(request,env);
+if(p==="/auth/logout")return authLogout(request,env);
+if(p.startsWith("/api/")){const session=await getSession(request,env);if(!session)return json({error:"unauthorized"},401);
+if(p==="/api/markets")return apiMarkets(env,new URL(request.url).searchParams.has("nocache"));
+if(p==="/api/me")return json({email:session.email,name:session.name,picture:session.picture});
+if(p==="/api/todos")return apiData(request,env,session.email,"todos");
+if(p==="/api/projects")return apiData(request,env,session.email,"projects");
+if(p==="/api/research/archive"){const a=await env.KV.get("research:archive");return json(a?{entries:JSON.parse(a)}:{entries:[]});}
+if(p==="/api/research"){if(request.method==="PUT"){const b2=await request.json();try{const prev=await env.KV.get("research:latest");if(prev){const pj=JSON.parse(prev);let arr=[];try{const a=await env.KV.get("research:archive");if(a)arr=JSON.parse(a);}catch(e){}if(!arr.length||arr[0].updated!==pj.updated){arr.unshift(pj);}arr=arr.slice(0,30);await env.KV.put("research:archive",JSON.stringify(arr));}}catch(e){}await env.KV.put("research:latest",JSON.stringify(b2));return json({ok:true});}const raw=await env.KV.get("research:latest");return json(raw?JSON.parse(raw):{updated:null,sections:[]});}
+if(p==="/api/config"){if(request.method==="PUT"){const b3=await request.json();await env.KV.put("config:dashboard",JSON.stringify(b3));return json({ok:true});}const raw=await env.KV.get("config:dashboard");return json(raw?JSON.parse(raw):{calDays:14,accent:"#3b66f5",title:"Command Center",hidePanels:[]});}
+if(p==="/api/drafts"){if(request.method==="PUT"){const b4=await request.json();await env.KV.put("drafts:latest",JSON.stringify(b4));return json({ok:true});}const raw=await env.KV.get("drafts:latest");return json(raw?JSON.parse(raw):{updated:null,items:[]});}
+if(p==="/api/tracker")return apiTracker(env,request);
+if(p==="/api/rental"&&request.method==="PUT"){const br=await request.json();await env.KV.put("config:rental",JSON.stringify(br));return json({ok:true});}
+if(p==="/api/ntfy"){if(request.method==="PUT"){const bn=await request.json();await env.KV.put("ntfy:topic",String((bn&&bn.topic)||""));return json({ok:true});}const t=await env.KV.get("ntfy:topic");return json({topic:t||""});}
+if(p==="/api/notify"){if(request.method!=="POST")return json({error:"post_only"},405);const bn=await request.json();return json(await ntfyPush(env,bn));}
+if(p==="/api/check-reminders")return json(await apiCheckReminders(env,session.email));
+const token=await freshToken(env,session);if(!token)return json({error:"token_expired"},401);
+if(p==="/api/calendar")return apiCalendar(env,token);
+if(p==="/api/gmail")return apiGmail(env,token);
+if(p==="/api/rental")return apiRental(env,token);
+return json({error:"not found"},404);}
+return env.ASSETS.fetch(request);}catch(err){return json({error:String((err&&err.message)||err)},500);}}};
