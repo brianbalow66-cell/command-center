@@ -142,20 +142,39 @@ if(p==="/api/config"){if(request.method==="PUT"){const b3=await request.json();a
 if(p==="/api/drafts"){if(request.method==="PUT"){const b4=await request.json();await env.KV.put("drafts:latest",JSON.stringify(b4));return json({ok:true});}const raw=await env.KV.get("drafts:latest");return json(raw?JSON.parse(raw):{updated:null,items:[]});}
 if(p==="/api/tracker")return apiTracker(env,request);
 if(p==="/api/leads"){
+  const leadId=(l)=>((l.time||"")+"|"+(l.contact||"")+"|"+(l.name||""));
+  const META="leads:meta";
+  if(request.method==="POST"){
+    const b=await request.json();
+    let meta={};try{const raw=await env.KV.get(META);if(raw)meta=JSON.parse(raw);}catch(e){}
+    if(b&&Array.isArray(b.dismissAll)){b.dismissAll.forEach(id=>{meta[id]=Object.assign({},meta[id]||{},{d:true});});}
+    else if(b&&b.id&&b.patch&&typeof b.patch==="object"){
+      const allowed={};["s","n","d"].forEach(k=>{if(k in b.patch)allowed[k]=b.patch[k];});
+      meta[b.id]=Object.assign({},meta[b.id]||{},allowed);
+    } else return json({error:"bad request"},400);
+    const keys=Object.keys(meta);if(keys.length>800)keys.slice(0,keys.length-800).forEach(k=>delete meta[k]);
+    await env.KV.put(META,JSON.stringify(meta));
+    return json({ok:true});
+  }
   let cfg={};try{const raw=await env.KV.get("config:leads");if(raw)cfg=JSON.parse(raw);}catch(e){}
   if(!cfg.url||!cfg.token)return json({leads:null,configured:false});
   const CK="leads:cache";const force=new URL(request.url).searchParams.has("nocache");
-  if(!force){try{const c=await env.KV.get(CK);if(c){const o=JSON.parse(c);if(Date.now()-o.t<5*60*1000)return json({leads:o.leads,asOf:o.t,cached:true});}}catch(e){}}
-  try{
-    const sig=(()=>{const a=new AbortController();setTimeout(()=>a.abort(),8000);return a.signal;})();
-    const r=await fetch(cfg.url+"?token="+encodeURIComponent(cfg.token),{signal:sig});
-    const d=await r.json();const leads=(d&&d.leads)||[];
-    await env.KV.put(CK,JSON.stringify({t:Date.now(),leads}),{expirationTtl:1800});
-    return json({leads,asOf:Date.now(),cached:false});
-  }catch(e){
-    try{const c=await env.KV.get(CK);if(c){const o=JSON.parse(c);return json({leads:o.leads,asOf:o.t,cached:true,stale:true});}}catch(e2){}
-    return json({leads:null,error:String(e)},502);
+  let leads=null,asOf=Date.now(),cached=false,stale=false;
+  if(!force){try{const c=await env.KV.get(CK);if(c){const o=JSON.parse(c);if(Date.now()-o.t<5*60*1000){leads=o.leads;asOf=o.t;cached=true;}}}catch(e){}}
+  if(leads==null){
+    try{
+      const sig=(()=>{const a=new AbortController();setTimeout(()=>a.abort(),8000);return a.signal;})();
+      const r=await fetch(cfg.url+"?token="+encodeURIComponent(cfg.token),{signal:sig});
+      const d=await r.json();leads=(d&&d.leads)||[];
+      await env.KV.put(CK,JSON.stringify({t:Date.now(),leads}),{expirationTtl:1800});
+    }catch(e){
+      try{const c=await env.KV.get(CK);if(c){const o=JSON.parse(c);leads=o.leads;asOf=o.t;cached=true;stale=true;}}catch(e2){}
+      if(leads==null)return json({leads:null,error:String(e)},502);
+    }
   }
+  let meta={};try{const raw=await env.KV.get(META);if(raw)meta=JSON.parse(raw);}catch(e){}
+  const out=leads.map(l=>{const id=leadId(l);return Object.assign({},l,{id,meta:meta[id]||null});});
+  return json({leads:out,asOf,cached,stale});
 }
 if(p==="/api/rental"&&request.method==="PUT"){const br=await request.json();await env.KV.put("config:rental",JSON.stringify(br));return json({ok:true});}
 if(p==="/api/ntfy"){if(request.method==="PUT"){const bn=await request.json();await env.KV.put("ntfy:topic",String((bn&&bn.topic)||""));return json({ok:true});}const t=await env.KV.get("ntfy:topic");return json({topic:t||""});}

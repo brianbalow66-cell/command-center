@@ -38,30 +38,108 @@ async function boot() {
 }
 
 /* ---------- Opelius website leads ---------- */
+const LEAD_STAGES = ["New", "Contacted", "Audit booked", "Proposal sent", "Won", "Lost"];
+const LEAD_STAGE_CLS = { "New": "st-new", "Contacted": "st-contacted", "Audit booked": "st-audit", "Proposal sent": "st-proposal", "Won": "st-won", "Lost": "st-lost" };
+let LEADS = [], LEADS_OPEN = {}, LEADS_SHOW_CLEARED = false;
+
 async function loadLeads() {
   const card = $("#leads-card"); if (!card) return;
-  const el = $("#leads");
   try {
     const d = await api("/api/leads").then((r) => r.json());
-    const leads = d && Array.isArray(d.leads) ? d.leads : null;
-    if (!leads || !leads.length) { card.hidden = true; return; }
-    const dayMs = 86400000, now = Date.now();
-    let fresh = 0;
-    el.innerHTML = leads.slice(0, 8).map((l) => {
-      const t = new Date(l.time);
-      const isNew = !isNaN(t) && (now - t.getTime()) < dayMs;
-      if (isNew) fresh++;
-      const when = isNaN(t) ? esc(l.time) : t.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-      return '<div class="lead-row' + (isNew ? " lead-new" : "") + '">' +
-        '<div class="lead-when">' + when + (isNew ? '<span class="lead-badge-new">NEW</span>' : "") + '</div>' +
-        '<div class="lead-main"><b>' + esc(l.name || "(no name)") + '</b>' + (l.business ? " &middot; " + esc(l.business) : "") +
-        '<div class="lead-sub">' + esc(l.contact || "") + (l.summary ? " &mdash; " + esc(l.summary) : "") + '</div></div>' +
-        '<div class="lead-src">' + esc(l.source || "") + '</div></div>';
-    }).join("");
-    $("#leads-status").textContent = fresh ? (fresh + " new in last 24h") : (leads.length + " on file");
-    card.hidden = false;
-    if (fresh) document.title = "🔔 " + fresh + " lead" + (fresh > 1 ? "s" : "") + " · Command Center";
+    LEADS = (d && Array.isArray(d.leads)) ? d.leads : [];
+    renderLeads();
   } catch (e) { card.hidden = true; }
+}
+function leadMeta(l) { return l.meta || {}; }
+function setLeadMeta(id, patch) {
+  const l = LEADS.find((x) => x.id === id);
+  if (l) l.meta = Object.assign({}, l.meta || {}, patch);
+  api("/api/leads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, patch }) });
+}
+function renderLeads() {
+  const card = $("#leads-card"), el = $("#leads");
+  if (!LEADS.length) { card.hidden = true; return; }
+  const visible = LEADS.filter((l) => LEADS_SHOW_CLEARED || !leadMeta(l).d);
+  const dayMs = 86400000, now = Date.now();
+  let fresh = 0;
+  const rows = visible.slice(0, LEADS_SHOW_CLEARED ? 30 : 10).map((l) => {
+    const m = leadMeta(l), stage = m.s || "New";
+    const t = new Date(l.time);
+    const isNew = !isNaN(t) && (now - t.getTime()) < dayMs && stage === "New" && !m.d;
+    if (isNew) fresh++;
+    const when = isNaN(t) ? esc(l.time) : t.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    const open = !!LEADS_OPEN[l.id];
+    const stIdx = LEAD_STAGES.indexOf(stage);
+    const segs = [0, 1, 2, 3].map((i) => '<i class="' + (stage !== "Lost" && stIdx >= i ? "on" : "") + '"></i>').join("");
+    let h = '<div class="lead-row' + (isNew ? " lead-new" : "") + (m.d ? " lead-cleared" : "") + '" data-id="' + esc(l.id) + '">' +
+      '<div class="lead-line">' +
+      '<div class="lead-when">' + when + (isNew ? '<span class="lead-badge-new">NEW</span>' : "") + '</div>' +
+      '<div class="lead-main"><b>' + esc(l.name || "(no name)") + '</b>' + (l.business ? " &middot; " + esc(l.business) : "") +
+      (open ? "" : '<div class="lead-sub">' + esc(l.contact || "") + (l.summary ? " &mdash; " + esc(l.summary) : "") + "</div>") + "</div>" +
+      '<div class="lead-right"><span class="lead-stage ' + (LEAD_STAGE_CLS[stage] || "") + '">' + esc(stage) + '</span>' +
+      '<span class="lead-prog" title="' + esc(stage) + '">' + segs + '</span>' +
+      '<span class="lead-src">' + esc(l.source || "") + '</span>' +
+      '<button class="lead-x" title="Clear this lead" data-x="' + esc(l.id) + '">&times;</button></div></div>';
+    if (open) {
+      const c = l.contact || "";
+      const isEmail = /@/.test(c), isPhone = /^[\d\s().+-]{7,}$/.test(c);
+      const clink = isEmail ? ('<a href="mailto:' + esc(c) + '">' + esc(c) + "</a>")
+        : (isPhone ? ('<a href="tel:' + esc(c.replace(/[^\d+]/g, "")) + '">' + esc(c) + "</a>") : esc(c));
+      const gmail = "https://mail.google.com/mail/?view=cm&fs=1&to=" + encodeURIComponent(c) +
+        "&su=" + encodeURIComponent("Re: your Opelius inquiry");
+      let det = '<div class="lead-details">';
+      det += '<div class="ld-row"><span>Contact</span><div>' + (clink || '<span class="muted">none</span>') + "</div></div>";
+      if (l.summary) det += '<div class="ld-row"><span>Summary</span><div>' + esc(l.summary) + "</div></div>";
+      const f = l.fields || {};
+      Object.keys(f).forEach((k) => { if (f[k]) det += '<div class="ld-row"><span>' + esc(k) + "</span><div>" + esc(f[k]) + "</div></div>"; });
+      det += '<div class="ld-row"><span>Note</span><div>' + (m.n ? esc(m.n) : '<span class="muted">none</span>') +
+        ' <span class="trk-edit" data-note="' + esc(l.id) + '">&#9998; edit</span></div></div>';
+      det += '<div class="ld-actions"><label class="muted" style="font-size:11px">Stage</label>' +
+        '<select class="lead-sel" data-stage="' + esc(l.id) + '">' +
+        LEAD_STAGES.map((s) => "<option" + (s === stage ? " selected" : "") + ">" + s + "</option>").join("") + "</select>" +
+        (isEmail ? '<a class="btn ghost lead-reply" href="' + gmail + '" target="_blank" rel="noopener">Reply &#9993;</a>' : "") +
+        (m.d ? '<button class="btn ghost" data-restore="' + esc(l.id) + '">Restore</button>' : "") +
+        "</div></div>";
+      h += det;
+    }
+    return h + "</div>";
+  }).join("");
+  el.innerHTML = rows || '<div class="muted" style="padding:8px 4px">No active leads &mdash; all cleared. &#127881;</div>';
+  $("#leads-status").textContent = fresh ? (fresh + " new in last 24h") : (visible.length ? visible.length + " active" : "");
+  const tog = $("#leads-toggle");
+  if (tog) { tog.textContent = LEADS_SHOW_CLEARED ? "hide cleared" : "show cleared"; tog.onclick = function (e) { e.preventDefault(); LEADS_SHOW_CLEARED = !LEADS_SHOW_CLEARED; renderLeads(); }; }
+  const clr = $("#leads-clear"); if (clr) clr.onclick = clearAllLeads;
+  el.querySelectorAll(".lead-row").forEach((r) => r.addEventListener("click", function (ev) {
+    if (ev.target.closest("a,select,button,[data-note]")) return;
+    const id = r.getAttribute("data-id"); LEADS_OPEN[id] = !LEADS_OPEN[id]; renderLeads();
+  }));
+  el.querySelectorAll("[data-x]").forEach((b) => b.addEventListener("click", function (ev) {
+    ev.stopPropagation(); setLeadMeta(b.getAttribute("data-x"), { d: true }); renderLeads();
+  }));
+  el.querySelectorAll("[data-restore]").forEach((b) => b.addEventListener("click", function (ev) {
+    ev.stopPropagation(); setLeadMeta(b.getAttribute("data-restore"), { d: false }); renderLeads();
+  }));
+  el.querySelectorAll("[data-stage]").forEach((s) => s.addEventListener("change", function () {
+    setLeadMeta(s.getAttribute("data-stage"), { s: s.value }); renderLeads();
+  }));
+  el.querySelectorAll("[data-note]").forEach((b) => b.addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    const id = b.getAttribute("data-note");
+    const l = LEADS.find((x) => x.id === id);
+    const v = prompt("Note for this lead:", (l && l.meta && l.meta.n) || "");
+    if (v === null) return;
+    setLeadMeta(id, { n: v }); renderLeads();
+  }));
+  card.hidden = false;
+  if (fresh) document.title = "🔔 " + fresh + " lead" + (fresh > 1 ? "s" : "") + " · Command Center";
+}
+function clearAllLeads(e) {
+  if (e) e.preventDefault();
+  if (!confirm("Clear all leads from the dashboard? They remain in email, Gmail, and the site backup.")) return;
+  const ids = LEADS.filter((l) => !leadMeta(l).d).map((l) => l.id);
+  ids.forEach((id) => { const l = LEADS.find((x) => x.id === id); if (l) l.meta = Object.assign({}, l.meta || {}, { d: true }); });
+  api("/api/leads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dismissAll: ids }) });
+  renderLeads();
 }
 
 /* ---------- markets ---------- */

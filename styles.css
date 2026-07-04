@@ -266,3 +266,33 @@ select.ptadd-remsel{padding:6px 9px;font-size:12px}
 .lead-main b{color:#fff}
 .lead-sub{font-size:11.5px;color:var(--muted);margin-top:1px;overflow-wrap:anywhere}
 .lead-src{flex:0 0 auto;font-size:10px;color:#f2b53c;border:1px solid rgba(242,181,60,.4);border-radius:10px;padding:1px 8px;margin-top:2px;white-space:nowrap}
+
+/* leads: interactivity */
+.lead-tools{margin-left:auto;font-size:10.5px;font-weight:600;text-transform:none;letter-spacing:0}
+.lead-tools a{color:var(--muted)}
+.lead-tools a:hover{color:#f2b53c}
+.lead-row{display:block;cursor:pointer;padding:0}
+.lead-line{display:flex;gap:12px;align-items:flex-start;padding:8px 4px}
+.lead-row:hover .lead-line{background:rgba(255,255,255,.02)}
+.lead-right{display:flex;align-items:center;gap:8px;flex:0 0 auto;padding-top:2px}
+.lead-stage{font-size:10px;font-weight:700;border-radius:10px;padding:1px 8px;white-space:nowrap;border:1px solid}
+.st-new{color:#f2b53c;border-color:rgba(242,181,60,.5);background:rgba(242,181,60,.08)}
+.st-contacted{color:#5b9dff;border-color:rgba(91,157,255,.5);background:rgba(91,157,255,.08)}
+.st-audit{color:#c48bff;border-color:rgba(196,139,255,.5);background:rgba(196,139,255,.08)}
+.st-proposal{color:#39d0c4;border-color:rgba(57,208,196,.5);background:rgba(57,208,196,.08)}
+.st-won{color:var(--green);border-color:rgba(52,215,127,.55);background:rgba(52,215,127,.1)}
+.st-lost{color:#8b93a3;border-color:rgba(139,147,163,.4);background:rgba(139,147,163,.08)}
+.lead-prog{display:inline-flex;gap:2px}
+.lead-prog i{width:9px;height:4px;border-radius:2px;background:#26303f;display:inline-block}
+.lead-prog i.on{background:#f2b53c}
+.lead-x{background:transparent;border:0;color:var(--muted);font-size:16px;cursor:pointer;line-height:1;padding:2px 4px;border-radius:6px}
+.lead-x:hover{color:#ff6b6b;background:rgba(255,107,107,.1)}
+.lead-cleared{opacity:.45}
+.lead-details{padding:2px 8px 12px 166px;cursor:default}
+.ld-row{display:flex;gap:10px;padding:3px 0;font-size:12.5px}
+.ld-row>span{flex:0 0 110px;color:var(--muted);font-size:10.5px;text-transform:uppercase;font-weight:600;letter-spacing:.3px;padding-top:2px}
+.ld-row>div{flex:1;overflow-wrap:anywhere}
+.ld-actions{display:flex;gap:10px;align-items:center;margin-top:8px}
+.lead-sel{background:#121823;color:#fff;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12px}
+.lead-reply{text-decoration:none;font-size:12px;padding:5px 12px}
+@media(max-width:700px){.lead-details{padding-left:12px}.lead-when{flex:0 0 108px}}
