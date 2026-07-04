@@ -25,7 +25,7 @@ async function boot() {
   await Promise.all([loadTodos(), loadProjs()]);
   checkReminders(); setInterval(checkReminders, 30000);
 
-  loadMarket(); loadCalendar(); loadMail(); loadResearch(); loadTracker(); loadRental();
+  loadMarket(); loadCalendar(); loadMail(); loadResearch(); loadTracker(); loadRental(); loadLeads();
   // auto-refresh live data (markets refresh hourly server-side; poll every 15 min to pick up updates)
   // markets only auto-refresh between 8am and 10pm local time
   setInterval(function(){ var h = new Date().getHours(); if (h >= 8 && h < 22) loadMarket(); }, 15 * 60000);
@@ -34,6 +34,34 @@ async function boot() {
   setInterval(loadResearch, 10 * 60000);
   setInterval(loadTracker, 5 * 60000);
   setInterval(loadRental, 30 * 60000);
+  setInterval(loadLeads, 5 * 60000);
+}
+
+/* ---------- Opelius website leads ---------- */
+async function loadLeads() {
+  const card = $("#leads-card"); if (!card) return;
+  const el = $("#leads");
+  try {
+    const d = await api("/api/leads").then((r) => r.json());
+    const leads = d && Array.isArray(d.leads) ? d.leads : null;
+    if (!leads || !leads.length) { card.hidden = true; return; }
+    const dayMs = 86400000, now = Date.now();
+    let fresh = 0;
+    el.innerHTML = leads.slice(0, 8).map((l) => {
+      const t = new Date(l.time);
+      const isNew = !isNaN(t) && (now - t.getTime()) < dayMs;
+      if (isNew) fresh++;
+      const when = isNaN(t) ? esc(l.time) : t.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+      return '<div class="lead-row' + (isNew ? " lead-new" : "") + '">' +
+        '<div class="lead-when">' + when + (isNew ? '<span class="lead-badge-new">NEW</span>' : "") + '</div>' +
+        '<div class="lead-main"><b>' + esc(l.name || "(no name)") + '</b>' + (l.business ? " &middot; " + esc(l.business) : "") +
+        '<div class="lead-sub">' + esc(l.contact || "") + (l.summary ? " &mdash; " + esc(l.summary) : "") + '</div></div>' +
+        '<div class="lead-src">' + esc(l.source || "") + '</div></div>';
+    }).join("");
+    $("#leads-status").textContent = fresh ? (fresh + " new in last 24h") : (leads.length + " on file");
+    card.hidden = false;
+    if (fresh) document.title = "🔔 " + fresh + " lead" + (fresh > 1 ? "s" : "") + " · Command Center";
+  } catch (e) { card.hidden = true; }
 }
 
 /* ---------- markets ---------- */

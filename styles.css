@@ -251,3 +251,18 @@ select.ptadd-remsel{padding:6px 9px;font-size:12px}
   .grid3{grid-template-columns:1fr}
   .scroll{max-height:300px}
 }
+
+/* Opelius leads panel */
+.band-leads{flex:0 0 auto;border-color:rgba(242,181,60,.45);box-shadow:0 0 24px rgba(242,181,60,.10)}
+.band-leads h2{color:#f2b53c}
+.band-leads h2 .badge{color:#f2b53c}
+.lead-row{display:flex;gap:12px;align-items:flex-start;padding:8px 4px;border-bottom:1px solid var(--line)}
+.lead-row:last-child{border-bottom:0}
+.lead-row.lead-new{background:rgba(242,181,60,.07);border-radius:8px}
+.lead-when{flex:0 0 150px;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;padding-top:2px}
+.lead-badge-new{display:inline-block;background:#f2b53c;color:#181203;border-radius:10px;padding:0 7px;font-weight:800;font-size:9.5px;margin-left:7px;animation:leadpulse 1.6s ease-in-out infinite;vertical-align:middle}
+@keyframes leadpulse{50%{opacity:.45}}
+.lead-main{flex:1;min-width:0;font-size:13px}
+.lead-main b{color:#fff}
+.lead-sub{font-size:11.5px;color:var(--muted);margin-top:1px;overflow-wrap:anywhere}
+.lead-src{flex:0 0 auto;font-size:10px;color:#f2b53c;border:1px solid rgba(242,181,60,.4);border-radius:10px;padding:1px 8px;margin-top:2px;white-space:nowrap}

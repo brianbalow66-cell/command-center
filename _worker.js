@@ -141,6 +141,22 @@ if(p==="/api/research"){if(request.method==="PUT"){const b2=await request.json()
 if(p==="/api/config"){if(request.method==="PUT"){const b3=await request.json();await env.KV.put("config:dashboard",JSON.stringify(b3));return json({ok:true});}const raw=await env.KV.get("config:dashboard");return json(raw?JSON.parse(raw):{calDays:14,accent:"#3b66f5",title:"Command Center",hidePanels:[]});}
 if(p==="/api/drafts"){if(request.method==="PUT"){const b4=await request.json();await env.KV.put("drafts:latest",JSON.stringify(b4));return json({ok:true});}const raw=await env.KV.get("drafts:latest");return json(raw?JSON.parse(raw):{updated:null,items:[]});}
 if(p==="/api/tracker")return apiTracker(env,request);
+if(p==="/api/leads"){
+  let cfg={};try{const raw=await env.KV.get("config:leads");if(raw)cfg=JSON.parse(raw);}catch(e){}
+  if(!cfg.url||!cfg.token)return json({leads:null,configured:false});
+  const CK="leads:cache";const force=new URL(request.url).searchParams.has("nocache");
+  if(!force){try{const c=await env.KV.get(CK);if(c){const o=JSON.parse(c);if(Date.now()-o.t<5*60*1000)return json({leads:o.leads,asOf:o.t,cached:true});}}catch(e){}}
+  try{
+    const sig=(()=>{const a=new AbortController();setTimeout(()=>a.abort(),8000);return a.signal;})();
+    const r=await fetch(cfg.url+"?token="+encodeURIComponent(cfg.token),{signal:sig});
+    const d=await r.json();const leads=(d&&d.leads)||[];
+    await env.KV.put(CK,JSON.stringify({t:Date.now(),leads}),{expirationTtl:1800});
+    return json({leads,asOf:Date.now(),cached:false});
+  }catch(e){
+    try{const c=await env.KV.get(CK);if(c){const o=JSON.parse(c);return json({leads:o.leads,asOf:o.t,cached:true,stale:true});}}catch(e2){}
+    return json({leads:null,error:String(e)},502);
+  }
+}
 if(p==="/api/rental"&&request.method==="PUT"){const br=await request.json();await env.KV.put("config:rental",JSON.stringify(br));return json({ok:true});}
 if(p==="/api/ntfy"){if(request.method==="PUT"){const bn=await request.json();await env.KV.put("ntfy:topic",String((bn&&bn.topic)||""));return json({ok:true});}const t=await env.KV.get("ntfy:topic");return json({topic:t||""});}
 if(p==="/api/notify"){if(request.method!=="POST")return json({error:"post_only"},405);const bn=await request.json();return json(await ntfyPush(env,bn));}
