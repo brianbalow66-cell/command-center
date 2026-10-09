@@ -319,7 +319,13 @@ select.ptadd-remsel{padding:6px 9px;font-size:12px}
 .modal-link:hover{color:var(--accent)}
 .fld{display:flex;flex-direction:column;gap:4px;min-width:0}
 .fld span{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:700}
-.fld input,.fld textarea{width:100%}
+.fld input,.fld textarea,.fld select{width:100%}
+.fld select{border:1px solid var(--line2);border-radius:9px;padding:8px 9px;background:#0b0f16;color:var(--ink);color-scheme:dark;cursor:pointer;font-size:13px}
+.daterow{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.daterow input[type=date]{flex:1;min-width:150px;width:auto}
+.chips{display:inline-flex;gap:4px}
+.chip{background:var(--accent-soft);color:var(--accent);border:1px solid #1c3a28;border-radius:20px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer}
+.chip:hover{filter:brightness(1.2)}
 .fld textarea{border:1px solid var(--line2);border-radius:9px;padding:8px 9px;background:#0b0f16;color:var(--ink);font-family:inherit;font-size:12.5px;resize:vertical}
 .fld textarea:focus{outline:none;border-color:var(--accent)}
 .fld2{display:grid;grid-template-columns:1fr 1fr;gap:8px}

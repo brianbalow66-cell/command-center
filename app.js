@@ -25,7 +25,7 @@ async function boot() {
   await Promise.all([loadTodos(), loadProjs()]);
   checkReminders(); setInterval(checkReminders, 30000);
 
-  loadMarket(); loadCalendar(); loadMail(); loadResearch(); loadTracker(); loadRental(); loadLeads();
+  loadMarket(); loadCalendar(); loadMail(); loadResearch(); loadTracker(); loadRental(); loadLeads(); resumePendingEvent();
   // auto-refresh live data (markets refresh hourly server-side; poll every 15 min to pick up updates)
   // markets only auto-refresh between 8am and 10pm local time
   setInterval(function(){ var h = new Date().getHours(); if (h >= 8 && h < 22) loadMarket(); }, 15 * 60000);
@@ -199,37 +199,84 @@ async function loadCalendar() {
 }
 /* --- add / edit / delete (writes go to Google Calendar through the worker) --- */
 const p2 = (n) => String(n).padStart(2, "0");
-const localDT = (d) => d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate()) + "T" + p2(d.getHours()) + ":" + p2(d.getMinutes());
 const localD = (d) => d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate());
+const localT = (d) => p2(d.getHours()) + ":" + p2(d.getMinutes());
+const fmtT = (hhmm) => { const h = +hhmm.slice(0, 2), m = hhmm.slice(3, 5); const ap = h < 12 ? "AM" : "PM"; return ((h % 12) || 12) + ":" + m + " " + ap; };
+const tMin = (hhmm) => (+hhmm.slice(0, 2)) * 60 + (+hhmm.slice(3, 5));
+const minT = (mins) => { mins = ((mins % 1440) + 1440) % 1440; return p2(Math.floor(mins / 60)) + ":" + p2(mins % 60); };
+const PENDING_KEY = "cc_pending_event";
+function buildTimeOptions(sel) {
+  if (sel.options.length) return;
+  for (let m = 0; m < 1440; m += 15) { const v = minT(m); const o = document.createElement("option"); o.value = v; o.textContent = fmtT(v); sel.appendChild(o); }
+}
+function setTime(sel, hhmm) { // selects hhmm, adding it as an option if it is not on a 15-minute boundary
+  buildTimeOptions(sel);
+  if (![...sel.options].some((o) => o.value === hhmm)) {
+    const o = document.createElement("option"); o.value = hhmm; o.textContent = fmtT(hhmm);
+    const after = [...sel.options].find((x) => x.value > hhmm); sel.insertBefore(o, after || null);
+  }
+  sel.value = hhmm;
+}
 function evSetAllDay(on) {
   $("#ev-allday").checked = on;
-  $("#ev-start").type = on ? "date" : "datetime-local";
-  $("#ev-end").type = on ? "date" : "datetime-local";
+  $("#ev-times").hidden = on;
+  $("#ev-enddate-row").hidden = !on;
+  if (on && (!$("#ev-enddate").value || $("#ev-enddate").value < $("#ev-date").value)) $("#ev-enddate").value = $("#ev-date").value;
+}
+// Fill the dialog from a plain body {summary,location,description,allDay,start,end} (start/end as the worker expects them).
+function fillEventForm(b) {
+  $("#ev-summary").value = b.summary || "";
+  $("#ev-location").value = b.location || "";
+  $("#ev-desc").value = b.description || "";
+  const st = String(b.start || ""), en = String(b.end || "");
+  $("#ev-date").value = st.slice(0, 10);
+  if (b.allDay) {
+    $("#ev-enddate").value = (en || st).slice(0, 10);
+    setTime($("#ev-start-t"), "09:00"); setTime($("#ev-end-t"), "10:00");
+  } else {
+    const sT = st.slice(11, 16) || "09:00";
+    let eT = en.slice(11, 16); if (!eT) eT = minT(tMin(sT) + 60);
+    setTime($("#ev-start-t"), sT); setTime($("#ev-end-t"), eT);
+    $("#ev-enddate").value = st.slice(0, 10);
+  }
+  evSetAllDay(!!b.allDay);
+}
+// Read the dialog back into a worker body. Times that end at or before the start roll over to the next day.
+function readEventForm() {
+  const allDay = $("#ev-allday").checked;
+  const date = $("#ev-date").value;
+  const b = { summary: $("#ev-summary").value.trim(), location: $("#ev-location").value.trim(), description: $("#ev-desc").value.trim(), allDay, timeZone: TZ };
+  if (allDay) { b.start = date; b.end = $("#ev-enddate").value || date; }
+  else {
+    const sT = $("#ev-start-t").value, eT = $("#ev-end-t").value;
+    let endDate = date;
+    if (date && tMin(eT) <= tMin(sT)) { const x = new Date(date + "T00:00:00"); x.setDate(x.getDate() + 1); endDate = localD(x); }
+    b.start = date ? date + "T" + sT : ""; b.end = endDate ? endDate + "T" + eT : "";
+  }
+  return b;
 }
 function openEventModal(e) {
   const m = $("#ev-modal"); if (!m) return;
   $("#ev-err").textContent = "";
   $("#ev-id").value = e && e.id ? e.id : "";
   $("#ev-title").textContent = e ? "Edit event" : "New event";
-  $("#ev-summary").value = e ? (e.summary === "(no title)" ? "" : e.summary) : "";
-  $("#ev-location").value = e ? (e.location || "") : "";
-  $("#ev-desc").value = e ? (e.description || "") : "";
-  const allDay = e ? !!(e.start && e.start.date && !e.start.dateTime) : false;
-  evSetAllDay(allDay);
   if (e) {
+    const allDay = !!(e.start && e.start.date && !e.start.dateTime);
+    let b;
     if (allDay) {
-      const s0 = new Date(e.start.date + "T00:00:00");
       // Google all-day end dates are exclusive; show the inclusive last day.
+      const s0 = new Date(e.start.date + "T00:00:00");
       const x = new Date((e.end && e.end.date ? e.end.date : e.start.date) + "T00:00:00"); x.setDate(x.getDate() - 1);
-      $("#ev-start").value = e.start.date;
-      $("#ev-end").value = localD(x < s0 ? s0 : x);
+      b = { allDay: true, start: e.start.date, end: localD(x < s0 ? s0 : x) };
     } else {
-      $("#ev-start").value = localDT(new Date(e.start.dateTime));
-      $("#ev-end").value = e.end && e.end.dateTime ? localDT(new Date(e.end.dateTime)) : "";
+      const s = new Date(e.start.dateTime), en = e.end && e.end.dateTime ? new Date(e.end.dateTime) : null;
+      b = { allDay: false, start: localD(s) + "T" + localT(s), end: en ? localD(en) + "T" + localT(en) : "" };
     }
+    b.summary = e.summary === "(no title)" ? "" : e.summary; b.location = e.location || ""; b.description = e.description || "";
+    fillEventForm(b);
   } else {
     const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
-    $("#ev-start").value = localDT(s); $("#ev-end").value = localDT(new Date(s.getTime() + 3600000));
+    fillEventForm({ allDay: false, start: localD(s) + "T" + localT(s), end: "" });
   }
   const link = $("#ev-glink");
   if (link) { if (e && e.htmlLink) { link.href = e.htmlLink; link.hidden = false; } else link.hidden = true; }
@@ -237,30 +284,45 @@ function openEventModal(e) {
   setTimeout(() => $("#ev-summary").focus(), 30);
 }
 function closeEventModal() { const m = $("#ev-modal"); if (m) m.hidden = true; }
-function calFail(r, body) {
-  if (r.status === 403 && body && body.error === "needs_consent") {
-    $("#ev-err").innerHTML = 'Google needs one-time permission to edit your calendar. <a href="/auth/login">Grant access</a> and try again.';
-    return true;
-  }
-  if (r.status === 401) { $("#ev-err").innerHTML = 'Signed out — <a href="/auth/login">sign in again</a>.'; return true; }
-  return false;
+function validateEventBody(b) {
+  if (!b.summary) return { msg: "Give the event a title.", focus: "#ev-summary" };
+  if (!b.start) return { msg: "Pick a date.", focus: "#ev-date" };
+  if (b.allDay && b.end && b.end < b.start) return { msg: "Last day can't be before the first day.", focus: "#ev-enddate" };
+  return null;
 }
 async function saveEvent() {
   const btn = $("#ev-save"); const errEl = $("#ev-err"); errEl.textContent = "";
   const id = $("#ev-id").value;
-  const allDay = $("#ev-allday").checked;
-  const body = { summary: $("#ev-summary").value.trim(), location: $("#ev-location").value.trim(), description: $("#ev-desc").value.trim(), allDay, start: $("#ev-start").value, end: $("#ev-end").value, timeZone: TZ };
-  if (!body.summary) { errEl.textContent = "Give the event a title."; $("#ev-summary").focus(); return; }
-  if (!body.start) { errEl.textContent = allDay ? "Pick a date." : "Pick a start time."; $("#ev-start").focus(); return; }
-  if (!allDay && body.end && body.end <= body.start) { errEl.textContent = "End must be after start."; $("#ev-end").focus(); return; }
+  const body = readEventForm();
+  const bad = validateEventBody(body); if (bad) { errEl.textContent = bad.msg; $(bad.focus).focus(); return; }
   btn.disabled = true; btn.textContent = "Saving…";
   try {
     const r = await api(id ? "/api/calendar/events/" + encodeURIComponent(id) : "/api/calendar/events", { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     let j = {}; try { j = await r.json(); } catch (e) {}
-    if (!r.ok) { if (!calFail(r, j)) errEl.textContent = "Could not save: " + (j.error || r.status); return; }
+    if (!r.ok) {
+      if (r.status === 403 && j.error === "needs_consent") {
+        // Remember what was typed, send the user through Google's one-time consent, and finish the save when they come back.
+        lset(PENDING_KEY, { id, body });
+        errEl.innerHTML = 'Google needs one-time permission to edit your calendar. <a href="/auth/login">Grant access</a> — your event is saved here and will be added when you return.';
+      } else if (r.status === 401) errEl.innerHTML = 'Signed out — <a href="/auth/login">sign in again</a>.';
+      else errEl.textContent = "Could not save: " + (j.error || r.status);
+      return;
+    }
     closeEventModal(); loadCalendar();
   } catch (e) { errEl.textContent = "Could not save — check your connection."; }
   finally { btn.disabled = false; btn.textContent = "Save"; }
+}
+// After the consent round-trip, submit the event that was waiting (or reopen the dialog with it if that fails).
+async function resumePendingEvent() {
+  const p = lget(PENDING_KEY); if (!p || !p.body) return;
+  localStorage.removeItem(PENDING_KEY);
+  try {
+    const r = await api(p.id ? "/api/calendar/events/" + encodeURIComponent(p.id) : "/api/calendar/events", { method: p.id ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(p.body) });
+    if (r.ok) { loadCalendar(); return; }
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    openEventModal(null); $("#ev-id").value = p.id || ""; $("#ev-title").textContent = p.id ? "Edit event" : "New event"; fillEventForm(p.body);
+    $("#ev-err").textContent = "Still couldn't save: " + (j.error || r.status) + ". Try again.";
+  } catch (e) { openEventModal(null); fillEventForm(p.body); $("#ev-err").textContent = "Could not save — check your connection."; }
 }
 async function deleteEvent(id) {
   const e = EVENTS.find((x) => x.id === id); if (!e) return;
@@ -635,16 +697,25 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   const evm = $("#ev-modal");
   if (evm) {
+    buildTimeOptions($("#ev-start-t")); buildTimeOptions($("#ev-end-t"));
     $("#ev-save").onclick = saveEvent;
     $("#ev-cancel").onclick = closeEventModal;
-    $("#ev-allday").addEventListener("change", () => {
-      const on = $("#ev-allday").checked; const sv = $("#ev-start").value, ev = $("#ev-end").value;
-      evSetAllDay(on);
-      $("#ev-start").value = on ? sv.slice(0, 10) : (sv && sv.length === 10 ? sv + "T09:00" : sv);
-      $("#ev-end").value = on ? ev.slice(0, 10) : (ev && ev.length === 10 ? ev + "T10:00" : ev);
+    $("#ev-allday").addEventListener("change", () => evSetAllDay($("#ev-allday").checked));
+    // keep the event's length when the start time moves (default one hour)
+    let lastStart = null;
+    $("#ev-start-t").addEventListener("focus", () => { lastStart = $("#ev-start-t").value; });
+    $("#ev-start-t").addEventListener("change", () => {
+      const s = $("#ev-start-t").value, e = $("#ev-end-t").value;
+      let dur = (lastStart != null) ? tMin(e) - tMin(lastStart) : 60; if (dur <= 0) dur += 1440; if (dur <= 0 || dur > 1439) dur = 60;
+      setTime($("#ev-end-t"), minT(tMin(s) + dur)); lastStart = s;
     });
+    $("#ev-date").addEventListener("change", () => { if ($("#ev-allday").checked && (!$("#ev-enddate").value || $("#ev-enddate").value < $("#ev-date").value)) $("#ev-enddate").value = $("#ev-date").value; });
+    evm.querySelectorAll(".chip[data-day]").forEach((c) => c.addEventListener("click", (e) => {
+      e.preventDefault(); const d = new Date(); d.setDate(d.getDate() + (+c.dataset.day)); $("#ev-date").value = localD(d);
+      if ($("#ev-allday").checked) $("#ev-enddate").value = localD(d);
+    }));
     evm.addEventListener("click", (e) => { if (e.target === evm) closeEventModal(); });
-    evm.addEventListener("keydown", (e) => { if (e.key === "Escape") closeEventModal(); if (e.key === "Enter" && e.target.tagName !== "TEXTAREA" && e.target.tagName !== "BUTTON") { e.preventDefault(); saveEvent(); } });
+    evm.addEventListener("keydown", (e) => { if (e.key === "Escape") closeEventModal(); if (e.key === "Enter" && e.target.tagName !== "TEXTAREA" && e.target.tagName !== "BUTTON" && e.target.tagName !== "SELECT") { e.preventDefault(); saveEvent(); } });
   }
   const archToggle = $("#arch-toggle");
   if (archToggle) archToggle.addEventListener("click", (e) => { e.preventDefault(); SHOW_ARCHIVED = !SHOW_ARCHIVED; renderTodos(); });
