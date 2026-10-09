@@ -171,26 +171,110 @@ async function loadMarket() {
 
 /* ---------- calendar ---------- */
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+let EVENTS = []; // last loaded events (for edit prefill)
+const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch (e) { return "UTC"; } })();
+// Google "date" (all-day) values are calendar dates, not instants — parse as local midnight so the day never shifts.
+function evStart(e) { if (e.start && e.start.dateTime) return new Date(e.start.dateTime); if (e.start && e.start.date) return new Date(e.start.date + "T00:00:00"); return null; }
 async function loadCalendar() {
   const el = $("#cal");
   try {
     const d = await api("/api/calendar").then((r) => r.json());
     const evs = (d.events || []).filter((e) => e.status !== "cancelled");
+    EVENTS = evs;
     $("#cal-status").textContent = evs.length + " events";
     if (!evs.length) { el.innerHTML = '<div class="empty">Nothing scheduled. Enjoy the calm.</div>'; return; }
     el.innerHTML = evs.map((e) => {
-      const s = e.start && (e.start.dateTime || e.start.date);
       const allDay = !!(e.start && e.start.date && !e.start.dateTime);
-      const dt = s ? new Date(s) : null;
+      const dt = evStart(e);
       const time = allDay ? "All day" : (dt ? dt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "");
       const wd = dt ? dt.toLocaleDateString("en-US", { weekday: "short" }) : "";
       const loc = e.location ? " &middot; " + esc(e.location.length > 40 ? e.location.slice(0, 40) + "…" : e.location) : "";
-      const tag = e.eventType === "fromGmail" ? '<span class="pill">gmail</span>' : "";
-      return '<div class="ev"><div class="day"><div class="d">' + (dt ? dt.getDate() : "") + '</div><div class="m">' +
+      const tag = e.eventType === "fromGmail" ? '<span class="pill">gmail</span>' : (e.recurringEventId ? '<span class="pill">repeats</span>' : "");
+      const tools = e.id ? '<div class="evtools"><button class="evbtn" data-act="evedit" title="Edit event">&#9998;</button><button class="evbtn evdel" data-act="evdel" title="Delete event">&times;</button></div>' : "";
+      return '<div class="ev" data-id="' + esc(e.id || "") + '"><div class="day"><div class="d">' + (dt ? dt.getDate() : "") + '</div><div class="m">' +
         (dt ? MON[dt.getMonth()] : "") + '</div></div><div class="body"><div class="ti">' +
-        esc(e.summary) + tag + '</div><div class="mt">' + wd + " &middot; " + esc(time) + loc + "</div></div></div>";
+        esc(e.summary) + tag + '</div><div class="mt">' + wd + " &middot; " + esc(time) + loc + "</div></div>" + tools + "</div>";
     }).join("");
   } catch (err) { el.innerHTML = '<div class="err">Calendar unavailable.</div>'; }
+}
+/* --- add / edit / delete (writes go to Google Calendar through the worker) --- */
+const p2 = (n) => String(n).padStart(2, "0");
+const localDT = (d) => d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate()) + "T" + p2(d.getHours()) + ":" + p2(d.getMinutes());
+const localD = (d) => d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate());
+function evSetAllDay(on) {
+  $("#ev-allday").checked = on;
+  $("#ev-start").type = on ? "date" : "datetime-local";
+  $("#ev-end").type = on ? "date" : "datetime-local";
+}
+function openEventModal(e) {
+  const m = $("#ev-modal"); if (!m) return;
+  $("#ev-err").textContent = "";
+  $("#ev-id").value = e && e.id ? e.id : "";
+  $("#ev-title").textContent = e ? "Edit event" : "New event";
+  $("#ev-summary").value = e ? (e.summary === "(no title)" ? "" : e.summary) : "";
+  $("#ev-location").value = e ? (e.location || "") : "";
+  $("#ev-desc").value = e ? (e.description || "") : "";
+  const allDay = e ? !!(e.start && e.start.date && !e.start.dateTime) : false;
+  evSetAllDay(allDay);
+  if (e) {
+    if (allDay) {
+      const s0 = new Date(e.start.date + "T00:00:00");
+      // Google all-day end dates are exclusive; show the inclusive last day.
+      const x = new Date((e.end && e.end.date ? e.end.date : e.start.date) + "T00:00:00"); x.setDate(x.getDate() - 1);
+      $("#ev-start").value = e.start.date;
+      $("#ev-end").value = localD(x < s0 ? s0 : x);
+    } else {
+      $("#ev-start").value = localDT(new Date(e.start.dateTime));
+      $("#ev-end").value = e.end && e.end.dateTime ? localDT(new Date(e.end.dateTime)) : "";
+    }
+  } else {
+    const s = new Date(); s.setMinutes(0, 0, 0); s.setHours(s.getHours() + 1);
+    $("#ev-start").value = localDT(s); $("#ev-end").value = localDT(new Date(s.getTime() + 3600000));
+  }
+  const link = $("#ev-glink");
+  if (link) { if (e && e.htmlLink) { link.href = e.htmlLink; link.hidden = false; } else link.hidden = true; }
+  m.hidden = false;
+  setTimeout(() => $("#ev-summary").focus(), 30);
+}
+function closeEventModal() { const m = $("#ev-modal"); if (m) m.hidden = true; }
+function calFail(r, body) {
+  if (r.status === 403 && body && body.error === "needs_consent") {
+    $("#ev-err").innerHTML = 'Google needs one-time permission to edit your calendar. <a href="/auth/login">Grant access</a> and try again.';
+    return true;
+  }
+  if (r.status === 401) { $("#ev-err").innerHTML = 'Signed out — <a href="/auth/login">sign in again</a>.'; return true; }
+  return false;
+}
+async function saveEvent() {
+  const btn = $("#ev-save"); const errEl = $("#ev-err"); errEl.textContent = "";
+  const id = $("#ev-id").value;
+  const allDay = $("#ev-allday").checked;
+  const body = { summary: $("#ev-summary").value.trim(), location: $("#ev-location").value.trim(), description: $("#ev-desc").value.trim(), allDay, start: $("#ev-start").value, end: $("#ev-end").value, timeZone: TZ };
+  if (!body.summary) { errEl.textContent = "Give the event a title."; $("#ev-summary").focus(); return; }
+  if (!body.start) { errEl.textContent = allDay ? "Pick a date." : "Pick a start time."; $("#ev-start").focus(); return; }
+  if (!allDay && body.end && body.end <= body.start) { errEl.textContent = "End must be after start."; $("#ev-end").focus(); return; }
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    const r = await api(id ? "/api/calendar/events/" + encodeURIComponent(id) : "/api/calendar/events", { method: id ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    if (!r.ok) { if (!calFail(r, j)) errEl.textContent = "Could not save: " + (j.error || r.status); return; }
+    closeEventModal(); loadCalendar();
+  } catch (e) { errEl.textContent = "Could not save — check your connection."; }
+  finally { btn.disabled = false; btn.textContent = "Save"; }
+}
+async function deleteEvent(id) {
+  const e = EVENTS.find((x) => x.id === id); if (!e) return;
+  const when = evStart(e);
+  if (!confirm('Delete "' + e.summary + '"' + (when ? " on " + when.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "") + (e.recurringEventId ? " (this occurrence only)" : "") + " from Google Calendar?")) return;
+  try {
+    const r = await api("/api/calendar/events/" + encodeURIComponent(id), { method: "DELETE" });
+    let j = {}; try { j = await r.json(); } catch (e2) {}
+    if (!r.ok && r.status !== 404) {
+      if (r.status === 403 && j.error === "needs_consent") { if (confirm("Google needs one-time permission to edit your calendar. Grant access now?")) location.href = "/auth/login"; return; }
+      alert("Could not delete: " + (j.error || r.status)); return;
+    }
+    loadCalendar();
+  } catch (e3) { alert("Could not delete — check your connection."); }
 }
 
 /* ---------- gmail ---------- */
@@ -542,6 +626,26 @@ document.addEventListener("DOMContentLoaded", () => {
     else if (act === "due") { if (t) { const v = prompt("Due date (YYYY-MM-DD), leave blank to clear:", t.due || ""); if (v === null) return; t.due = (v.trim() || null); } }
     persistTodos(); renderTodos();
   });
+  const calNew = $("#cal-new"); if (calNew) calNew.onclick = (e) => { e.preventDefault(); openEventModal(null); };
+  $("#cal").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]"); if (!b) return;
+    const row = b.closest(".ev"); const id = row && row.dataset.id; if (!id) return;
+    if (b.dataset.act === "evedit") openEventModal(EVENTS.find((x) => x.id === id) || null);
+    else if (b.dataset.act === "evdel") deleteEvent(id);
+  });
+  const evm = $("#ev-modal");
+  if (evm) {
+    $("#ev-save").onclick = saveEvent;
+    $("#ev-cancel").onclick = closeEventModal;
+    $("#ev-allday").addEventListener("change", () => {
+      const on = $("#ev-allday").checked; const sv = $("#ev-start").value, ev = $("#ev-end").value;
+      evSetAllDay(on);
+      $("#ev-start").value = on ? sv.slice(0, 10) : (sv && sv.length === 10 ? sv + "T09:00" : sv);
+      $("#ev-end").value = on ? ev.slice(0, 10) : (ev && ev.length === 10 ? ev + "T10:00" : ev);
+    });
+    evm.addEventListener("click", (e) => { if (e.target === evm) closeEventModal(); });
+    evm.addEventListener("keydown", (e) => { if (e.key === "Escape") closeEventModal(); if (e.key === "Enter" && e.target.tagName !== "TEXTAREA" && e.target.tagName !== "BUTTON") { e.preventDefault(); saveEvent(); } });
+  }
   const archToggle = $("#arch-toggle");
   if (archToggle) archToggle.addEventListener("click", (e) => { e.preventDefault(); SHOW_ARCHIVED = !SHOW_ARCHIVED; renderTodos(); });
   const research = $("#research");

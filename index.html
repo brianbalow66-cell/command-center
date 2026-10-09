@@ -62,7 +62,7 @@
 
   <div class="grid3">
     <section class="card">
-      <h2>Upcoming &middot; Next 2 Months <span class="badge" id="cal-status"></span></h2>
+      <h2><span>Upcoming &middot; Next 2 Months</span><span class="h2right"><span class="badge" id="cal-status"></span><a href="#" class="cal-new" id="cal-new" title="Add an event to Google Calendar">+ new</a></span></h2>
       <div class="scroll" id="cal"><div class="loading">Loading calendar&hellip;</div></div>
     </section>
     <section class="card">
@@ -102,6 +102,23 @@
       <div class="proj-chart"><canvas id="pchart" height="78"></canvas></div>
     </div>
   </section>
+</div>
+
+<div id="ev-modal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-labelledby="ev-title">
+    <div class="modal-head"><h3 id="ev-title">New event</h3><a id="ev-glink" href="#" target="_blank" rel="noopener" class="modal-link" hidden>Open in Google Calendar &#8599;</a></div>
+    <input type="hidden" id="ev-id">
+    <label class="fld"><span>Title</span><input type="text" id="ev-summary" placeholder="What's happening?" maxlength="200"></label>
+    <label class="chk"><input type="checkbox" id="ev-allday"> All day</label>
+    <div class="fld2">
+      <label class="fld"><span>Start</span><input type="datetime-local" id="ev-start"></label>
+      <label class="fld"><span>End</span><input type="datetime-local" id="ev-end"></label>
+    </div>
+    <label class="fld"><span>Location</span><input type="text" id="ev-location" placeholder="Optional" maxlength="200"></label>
+    <label class="fld"><span>Notes</span><textarea id="ev-desc" rows="3" placeholder="Optional"></textarea></label>
+    <div class="modal-err" id="ev-err"></div>
+    <div class="modal-foot"><button class="btn ghost" id="ev-cancel">Cancel</button><button class="btn" id="ev-save">Save</button></div>
+  </div>
 </div>
 
 <script src="/app.js"></script>
