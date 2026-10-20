@@ -134,6 +134,25 @@ export default {async fetch(request,env){const p=new URL(request.url).pathname;t
 if(p==="/auth/login")return authLogin(request,env);
 if(p==="/auth/callback")return authCallback(request,env);
 if(p==="/auth/logout")return authLogout(request,env);
+  // Server-to-server hook: the opelius.tech auto-reply cron calls this when a prospect
+  // reply goes out, moving the lead's stage from "New" to "Contacted". Token-authenticated
+  // (env.LEADS_HOOK_TOKEN secret), no session needed. Never regresses a stage set by hand.
+  if(p==="/hook/lead-stage"){
+      if(request.method!=="POST")return json({error:"method not allowed"},405);
+      const want=env.LEADS_HOOK_TOKEN||"";const got=(request.headers.get("authorization")||"").replace(/^Bearer\s+/i,"");
+      const same=want.length>0&&want.length===got.length&&[...want].every((c,i)=>c===got[i]);
+      if(!same)return json({error:"unauthorized"},401);
+      const b=await request.json().catch(()=>null);
+      if(!b||!b.time||!b.contact||!b.name)return json({error:"bad request"},400);
+      const id=String(b.time)+"|"+String(b.contact)+"|"+String(b.name);
+      const stage=String(b.stage||"Contacted");
+      const META="leads:meta";let meta={};try{const raw=await env.KV.get(META);if(raw)meta=JSON.parse(raw);}catch(e){}
+      const cur=meta[id]||{};
+      if(cur.s&&cur.s!=="New")return json({ok:true,updated:false,id,stage:cur.s});
+      meta[id]=Object.assign({},cur,{s:stage});
+      await env.KV.put(META,JSON.stringify(meta));
+      return json({ok:true,updated:true,id,stage});
+  }
 if(p.startsWith("/api/")){const session=await getSession(request,env);if(!session)return json({error:"unauthorized"},401);
 if(p==="/api/markets")return apiMarkets(env,new URL(request.url).searchParams.has("nocache"));
 if(p==="/api/me")return json({email:session.email,name:session.name,picture:session.picture});
