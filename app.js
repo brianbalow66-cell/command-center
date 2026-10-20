@@ -169,6 +169,20 @@ async function loadMarket() {
   } catch (err) { el.innerHTML = '<div class="err">Markets unavailable.</div>'; }
 }
 
+/* ---------- Google connection state ---------- */
+// The worker answers 401 {error:"token_expired"} when Google's refresh token is dead (sign-in revoked, token aged out).
+// Show a reconnect prompt in the Google-backed panels and send the user through sign-in once (not more than every 30 min).
+let GOOGLE_DEAD = false;
+function googleDead(r, d) { return r.status === 401 || (d && (d.error === "token_expired" || d.error === "unauthorized")); }
+function reconnectHtml(what) { return '<div class="reconnect"><div>Google ' + what + ' is disconnected.</div><a class="btn ghost" href="/auth/login">Reconnect Google</a></div>'; }
+function handleGoogleDead(panelEl, statusEl, what) {
+  if (panelEl) panelEl.innerHTML = reconnectHtml(what);
+  if (statusEl) statusEl.textContent = "disconnected";
+  if (GOOGLE_DEAD) return; GOOGLE_DEAD = true;
+  let last = 0; try { last = +sessionStorage.getItem("cc_reauth_at") || 0; } catch (e) {}
+  if (Date.now() - last > 30 * 60000) { try { sessionStorage.setItem("cc_reauth_at", String(Date.now())); } catch (e) {} location.href = "/auth/login"; }
+}
+
 /* ---------- calendar ---------- */
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 let EVENTS = []; // last loaded events (for edit prefill)
@@ -178,7 +192,8 @@ function evStart(e) { if (e.start && e.start.dateTime) return new Date(e.start.d
 async function loadCalendar() {
   const el = $("#cal");
   try {
-    const d = await api("/api/calendar").then((r) => r.json());
+    const r = await api("/api/calendar"); const d = await r.json();
+    if (googleDead(r, d)) { handleGoogleDead(el, $("#cal-status"), "Calendar"); return; }
     const evs = (d.events || []).filter((e) => e.status !== "cancelled");
     EVENTS = evs;
     $("#cal-status").textContent = evs.length + " events";
@@ -359,7 +374,8 @@ async function loadMail() {
   const el = $("#mail");
   try {
     await loadDrafts();
-    const d = await api("/api/gmail").then((r) => r.json());
+    const r = await api("/api/gmail"); const d = await r.json();
+    if (googleDead(r, d)) { handleGoogleDead(el, $("#mail-status"), "Mail"); return; }
     const items = d.messages || [];
     const realDrafts = new Set(d.draftThreads || []);
     let unread = 0, dcount = 0;
