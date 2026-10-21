@@ -186,6 +186,26 @@ function handleGoogleDead(panelEl, statusEl, what) {
 /* ---------- calendar ---------- */
 const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 let EVENTS = []; // last loaded events (for edit prefill)
+let CAL_FEEDS = []; // iCal feeds merged in by the worker (e.g. Planning Center)
+// Manage the iCal feeds shown in the calendar. One feed is plenty for most people, so this is a simple prompt flow.
+async function editFeeds() {
+  const cur = CAL_FEEDS[0] || null;
+  const url = prompt("Calendar feed link (iCal / .ics / webcal). Planning Center: My Schedule → Subscribe → copy the link.\nLeave blank to remove the feed.", cur ? cur.url : "");
+  if (url === null) return;
+  let feeds = [];
+  if (url.trim()) {
+    const name = prompt("Short label to show on these events:", cur ? cur.name : "church");
+    if (name === null) return;
+    feeds = [{ name: (name.trim() || "feed").slice(0, 20), url: url.trim() }];
+  }
+  try {
+    const cfg = await api("/api/config").then((r) => r.json());
+    const next = Object.assign({}, cfg || {}, { icsFeeds: feeds });
+    const r = await api("/api/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
+    if (!r.ok) throw new Error(r.status);
+    loadCalendar();
+  } catch (e) { alert("Couldn't save the feed setting."); }
+}
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch (e) { return "UTC"; } })();
 // Google "date" (all-day) values are calendar dates, not instants — parse as local midnight so the day never shifts.
 function evStart(e) { if (e.start && e.start.dateTime) return new Date(e.start.dateTime); if (e.start && e.start.date) return new Date(e.start.date + "T00:00:00"); return null; }
@@ -195,7 +215,8 @@ async function loadCalendar() {
     const r = await api("/api/calendar"); const d = await r.json();
     if (googleDead(r, d)) { handleGoogleDead(el, $("#cal-status"), "Calendar"); return; }
     const evs = (d.events || []).filter((e) => e.status !== "cancelled");
-    EVENTS = evs;
+    EVENTS = evs; CAL_FEEDS = d.feeds || [];
+    const fb = $("#cal-feeds"); if (fb) fb.textContent = CAL_FEEDS.length ? "feeds (" + CAL_FEEDS.length + ")" : "+ feed";
     $("#cal-status").textContent = evs.length + " events";
     if (!evs.length) { el.innerHTML = '<div class="empty">Nothing scheduled. Enjoy the calm.</div>'; return; }
     el.innerHTML = evs.map((e) => {
@@ -204,8 +225,8 @@ async function loadCalendar() {
       const time = allDay ? "All day" : (dt ? dt.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "");
       const wd = dt ? dt.toLocaleDateString("en-US", { weekday: "short" }) : "";
       const loc = e.location ? " &middot; " + esc(e.location.length > 40 ? e.location.slice(0, 40) + "…" : e.location) : "";
-      const tag = e.eventType === "fromGmail" ? '<span class="pill">gmail</span>' : (e.recurringEventId ? '<span class="pill">repeats</span>' : "");
-      const tools = e.id ? '<div class="evtools"><button class="evbtn" data-act="evedit" title="Edit event">&#9998;</button><button class="evbtn evdel" data-act="evdel" title="Delete event">&times;</button></div>' : "";
+      const tag = e.source ? '<span class="pill feed">' + esc(e.source) + '</span>' : (e.eventType === "fromGmail" ? '<span class="pill">gmail</span>' : (e.recurringEventId ? '<span class="pill">repeats</span>' : ""));
+      const tools = (e.id && !e.readOnly) ? '<div class="evtools"><button class="evbtn" data-act="evedit" title="Edit event">&#9998;</button><button class="evbtn evdel" data-act="evdel" title="Delete event">&times;</button></div>' : "";
       return '<div class="ev" data-id="' + esc(e.id || "") + '"><div class="day"><div class="d">' + (dt ? dt.getDate() : "") + '</div><div class="m">' +
         (dt ? MON[dt.getMonth()] : "") + '</div></div><div class="body"><div class="ti">' +
         esc(e.summary) + tag + '</div><div class="mt">' + wd + " &middot; " + esc(time) + loc + "</div></div>" + tools + "</div>";
@@ -705,6 +726,7 @@ document.addEventListener("DOMContentLoaded", () => {
     persistTodos(); renderTodos();
   });
   const calNew = $("#cal-new"); if (calNew) calNew.onclick = (e) => { e.preventDefault(); openEventModal(null); };
+  const calFeeds = $("#cal-feeds"); if (calFeeds) calFeeds.onclick = (e) => { e.preventDefault(); editFeeds(); };
   $("#cal").addEventListener("click", (e) => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     const row = b.closest(".ev"); const id = row && row.dataset.id; if (!id) return;
