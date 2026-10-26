@@ -34,6 +34,7 @@ async function boot() {
   setInterval(loadResearch, 10 * 60000);
   setInterval(loadTracker, 5 * 60000);
   setInterval(loadRental, 30 * 60000);
+  checkForUpdate(); setInterval(checkForUpdate, 10 * 60000);
   setInterval(loadLeads, 5 * 60000);
 }
 
@@ -140,6 +141,17 @@ function clearAllLeads(e) {
   ids.forEach((id) => { const l = LEADS.find((x) => x.id === id); if (l) l.meta = Object.assign({}, l.meta || {}, { d: true }); });
   api("/api/leads", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ dismissAll: ids }) });
   renderLeads();
+}
+
+/* ---------- self-update: reload when a new build is deployed ---------- */
+// The page only re-fetches /api data, so a tab left open for days keeps running old code. Compare app.js's ETag
+// every 10 minutes and reload when it changes (not while the event dialog is open).
+let APP_ETAG = null;
+async function appEtag() { try { const r = await fetch("/app.js", { method: "HEAD", cache: "no-store", credentials: "same-origin" }); return r.ok ? (r.headers.get("etag") || r.headers.get("last-modified") || null) : null; } catch (e) { return null; } }
+async function checkForUpdate() {
+  const tag = await appEtag(); if (!tag) return;
+  if (APP_ETAG === null) { APP_ETAG = tag; return; }
+  if (tag !== APP_ETAG) { const m = document.getElementById("ev-modal"); if (m && !m.hidden) return; location.reload(); }
 }
 
 /* ---------- markets ---------- */

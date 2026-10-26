@@ -302,12 +302,12 @@ select.ptadd-remsel{padding:6px 9px;font-size:12px}
 .cal-new{font-size:10.5px;font-weight:700;color:var(--accent);text-transform:none;letter-spacing:0}
 .cal-new:hover{filter:brightness(1.15)}
 .ev{align-items:center}
-.evtools{display:flex;gap:2px;flex:0 0 auto;opacity:.45;transition:opacity .15s ease}
+.evtools{display:flex;gap:3px;flex:0 0 auto;opacity:.85;transition:opacity .15s ease}
 .ev:hover .evtools{opacity:1}
-@media(hover:none){.evtools{opacity:.8}}
-.evbtn{background:none;border:0;color:var(--muted);cursor:pointer;font-size:14px;padding:2px 5px;line-height:1;border-radius:6px}
+@media(hover:none){.evtools{opacity:1}}
+.evbtn{background:#0b0f16;border:1px solid var(--line2);color:#c9d3df;cursor:pointer;font-size:13px;padding:3px 6px;line-height:1;border-radius:6px}
 .evbtn:hover{color:var(--accent);background:#17211c}
-.evbtn.evdel{font-size:17px}
+.evbtn.evdel{font-size:15px;color:#e9a0a0;border-color:#3a2426}
 .evbtn.evdel:hover{color:var(--red);background:#241416}
 
 /* ---------- modal ---------- */
