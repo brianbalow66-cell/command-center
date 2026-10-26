@@ -226,8 +226,8 @@ async function loadCalendar() {
       const wd = dt ? dt.toLocaleDateString("en-US", { weekday: "short" }) : "";
       const loc = e.location ? " &middot; " + esc(e.location.length > 40 ? e.location.slice(0, 40) + "…" : e.location) : "";
       const tag = e.source ? '<span class="pill feed">' + esc(e.source) + '</span>' : (e.eventType === "fromGmail" ? '<span class="pill">gmail</span>' : (e.recurringEventId ? '<span class="pill">repeats</span>' : ""));
-      const tools = (e.id && !e.readOnly) ? '<div class="evtools"><button class="evbtn" data-act="evedit" title="Edit event">&#9998;</button><button class="evbtn evdel" data-act="evdel" title="Delete event">&times;</button></div>' : "";
-      return '<div class="ev" data-id="' + esc(e.id || "") + '"><div class="day"><div class="d">' + (dt ? dt.getDate() : "") + '</div><div class="m">' +
+      const tools = e.id ? '<div class="evtools"><button class="evbtn" data-act="evedit" title="Edit event">&#9998;</button><button class="evbtn evdel" data-act="evdel" title="Delete event">&times;</button></div>' : "";
+      return '<div class="ev" data-id="' + esc(e.id || "") + '"' + (e.readOnly ? ' data-feed="1"' : "") + '><div class="day"><div class="d">' + (dt ? dt.getDate() : "") + '</div><div class="m">' +
         (dt ? MON[dt.getMonth()] : "") + '</div></div><div class="body"><div class="ti">' +
         esc(e.summary) + tag + '</div><div class="mt">' + wd + " &middot; " + esc(time) + loc + "</div></div>" + tools + "</div>";
     }).join("");
@@ -295,7 +295,8 @@ function openEventModal(e) {
   const m = $("#ev-modal"); if (!m) return;
   $("#ev-err").textContent = "";
   $("#ev-id").value = e && e.id ? e.id : "";
-  $("#ev-title").textContent = e ? "Edit event" : "New event";
+  $("#ev-title").textContent = e ? (e.readOnly ? "Edit church entry" : "Edit event") : "New event";
+  const note = $("#ev-note"); if (note) { note.hidden = !(e && e.readOnly); if (e && e.readOnly) note.textContent = "This came from the " + (e.source || "feed") + " feed. Saving makes it a regular event on your Google Calendar and hides the feed copy here."; }
   if (e) {
     const allDay = !!(e.start && e.start.date && !e.start.dateTime);
     let b;
@@ -328,7 +329,9 @@ function validateEventBody(b) {
 }
 async function saveEvent() {
   const btn = $("#ev-save"); const errEl = $("#ev-err"); errEl.textContent = "";
-  const id = $("#ev-id").value;
+  let id = $("#ev-id").value;
+  const feedId = id.startsWith("ics:") ? id : "";
+  if (feedId) id = "";
   const body = readEventForm();
   const bad = validateEventBody(body); if (bad) { errEl.textContent = bad.msg; $(bad.focus).focus(); return; }
   btn.disabled = true; btn.textContent = "Saving…";
@@ -344,9 +347,21 @@ async function saveEvent() {
       else errEl.textContent = "Could not save: " + (j.error || r.status);
       return;
     }
+    if (feedId) { try { await api("/api/calendar/hide", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: feedId }) }); } catch (e) {} }
     closeEventModal(); loadCalendar();
   } catch (e) { errEl.textContent = "Could not save — check your connection."; }
   finally { btn.disabled = false; btn.textContent = "Save"; }
+}
+// Feed (church) entries can't be deleted at the source from here; "delete" hides them on the dashboard.
+async function hideFeedEvent(id) {
+  const e = EVENTS.find((x) => x.id === id); if (!e) return;
+  const when = evStart(e);
+  if (!confirm('Remove "' + e.summary + '"' + (when ? " on " + when.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "") + " from the dashboard? It stays in " + (e.source === "church" ? "Planning Center" : "the feed") + ".")) return;
+  try {
+    const r = await api("/api/calendar/hide", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
+    if (!r.ok) { alert("Could not remove: " + r.status); return; }
+    loadCalendar();
+  } catch (e2) { alert("Could not remove — check your connection."); }
 }
 // After the consent round-trip, submit the event that was waiting (or reopen the dialog with it if that fails).
 async function resumePendingEvent() {
@@ -731,7 +746,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     const row = b.closest(".ev"); const id = row && row.dataset.id; if (!id) return;
     if (b.dataset.act === "evedit") openEventModal(EVENTS.find((x) => x.id === id) || null);
-    else if (b.dataset.act === "evdel") deleteEvent(id);
+    else if (b.dataset.act === "evdel") { if (id.startsWith("ics:")) hideFeedEvent(id); else deleteEvent(id); }
   });
   const evm = $("#ev-modal");
   if (evm) {
